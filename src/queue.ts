@@ -113,6 +113,54 @@ export class TaskQueue {
     `).all(contextId, limit) as Task[];
   }
 
+  // Expire tasks stuck in 'running' for longer than maxAgeMs (default 30 min)
+  expireStuckTasks(maxAgeMs = 30 * 60 * 1000): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const now = Date.now();
+    const result = this.db.prepare(`
+      UPDATE tasks
+      SET status = 'failed', error = 'Task expired: exceeded maximum running time', completedAt = ?
+      WHERE status = 'running' AND startedAt < ?
+    `).run(now, cutoff);
+    return result.changes;
+  }
+
+  // List all tasks with pagination
+  listAll(limit = 50, offset = 0): Task[] {
+    return this.db.prepare(`
+      SELECT * FROM tasks ORDER BY createdAt DESC LIMIT ? OFFSET ?
+    `).all(limit, offset) as Task[];
+  }
+
+  // Get queue statistics
+  stats(): { counts: Record<TaskStatus, number>; oldestQueuedAge: number | null } {
+    const rows = this.db.prepare(`
+      SELECT status, COUNT(*) as count FROM tasks GROUP BY status
+    `).all() as { status: TaskStatus; count: number }[];
+
+    const counts: Record<TaskStatus, number> = { queued: 0, running: 0, completed: 0, failed: 0 };
+    for (const row of rows) {
+      counts[row.status] = row.count;
+    }
+
+    const oldest = this.db.prepare(`
+      SELECT MIN(createdAt) as oldest FROM tasks WHERE status = 'queued'
+    `).get() as { oldest: number | null };
+
+    const oldestQueuedAge = oldest.oldest != null ? Date.now() - oldest.oldest : null;
+
+    return { counts, oldestQueuedAge };
+  }
+
+  // Purge old completed/failed tasks older than olderThanMs
+  cleanup(olderThanMs: number): number {
+    const cutoff = Date.now() - olderThanMs;
+    const result = this.db.prepare(`
+      DELETE FROM tasks WHERE status IN ('completed', 'failed') AND completedAt < ?
+    `).run(cutoff);
+    return result.changes;
+  }
+
   close() {
     this.db.close();
   }

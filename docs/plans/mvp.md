@@ -23,11 +23,11 @@ Refactor `src/types.ts` to be comprehensive. Add Zod schema validation for `conf
 ### Task 2: Task queue with full test coverage  
 Rewrite `src/queue.ts` to be robust. Add proper error handling, task expiry (stuck tasks), and comprehensive tests.
 
-- [ ] Add task expiry: tasks stuck in `running` for >30 min auto-fail
-- [ ] Add `listAll(limit, offset)` for pagination
-- [ ] Add `stats()` method: counts by status, oldest queued age
-- [ ] Add `cleanup(olderThanMs)` to purge old completed/failed tasks
-- [ ] Write tests: enqueue, dequeue, priority ordering, FIFO within same priority, context isolation, expiry, cleanup, concurrent operations
+- [x] Add task expiry: tasks stuck in `running` for >30 min auto-fail
+- [x] Add `listAll(limit, offset)` for pagination
+- [x] Add `stats()` method: counts by status, oldest queued age
+- [x] Add `cleanup(olderThanMs)` to purge old completed/failed tasks
+- [x] Write tests: enqueue, dequeue, priority ordering, FIFO within same priority, context isolation, expiry, cleanup, concurrent operations
 
 ### Task 3: Context manager with template support
 Rewrite `src/context.ts` with template support, validation, and proper file operations.
