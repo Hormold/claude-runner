@@ -10,7 +10,7 @@
  *   { result, sessionId? } on success
  *   { error } on failure
  */
-import { query, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-code';
+import { query, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-agent-sdk';
 
 interface WorkerInput {
   prompt: string;
@@ -48,7 +48,7 @@ async function main() {
     };
 
     if (input.systemPrompt) {
-      options.customSystemPrompt = input.systemPrompt;
+      options.systemPrompt = input.systemPrompt;
     }
     if (input.resume) {
       options.resume = input.resume;
@@ -57,7 +57,13 @@ async function main() {
       options.mcpServers = input.mcpServers;
     }
 
-    const stream = query({ prompt: input.prompt, options });
+    const stream = query({
+      prompt: input.prompt,
+      options: {
+        ...options,
+        stderr: (data: string) => { process.stderr.write(data); },
+      },
+    });
 
     let resultText = '';
     let hasResult = false;

@@ -1,0 +1,245 @@
+ralphex v0.20.0-b757d44-2026-03-04T02:42:42Z
+starting ralphex loop (max 50 iterations) (tasks-only mode)
+plan: docs/plans/session-isolation.md
+branch: mvp
+progress log: /Users/hormold/projects/claude-runner/.ralphex/progress/progress-session-isolation.txt
+
+[26-03-04 00:45:20] warning: codex not found (codex: exec: "codex": executable file not found in $PATH), disabling codex review phase
+starting task execution phase
+
+--- task iteration 1 ---
+[26-03-04 00:45:36] TASK 1: Docker-based session isolation
+[26-03-04 00:45:36] This task replaces the current process-based Claude Code
+[26-03-04 00:45:36] execution with Docker containers per context. It involves:
+[26-03-04 00:45:36]   - Creating a Dockerfile and docker-compose template for
+[26-03-04 00:45:36] context containers
+[26-03-04 00:45:36]   - Updating the session manager to spawn Docker containers
+[26-03-04 00:45:36] instead of bare processes
+[26-03-04 00:45:36]   - Mounting context-specific directories as the only writable
+[26-03-04 00:45:36] volume
+[26-03-04 00:45:36]   - Adding container lifecycle management (auto-stop on idle,
+[26-03-04 00:45:36] warm container reuse)
+[26-03-04 00:45:36]   - Writing tests for container lifecycle, filesystem
+[26-03-04 00:45:36] isolation, and cleanup
+[26-03-04 00:45:36] Key files: The existing session/context manager, plus new
+[26-03-04 00:45:36] Docker configuration files.
+[26-03-04 00:45:36] Let me explore the codebase to understand the current
+[26-03-04 00:45:36] architecture.
+[26-03-04 00:46:49] Now let me look at existing tests for patterns.
+[26-03-04 00:47:50] Now let me create the docker worker script that runs inside
+[26-03-04 00:47:50] containers, and the DockerSessionManager class.
+[26-03-04 00:49:24] The types.ts changes (isolation config field) are planned
+[26-03-04 00:49:24] for Task 5. Task 1 just needs the Docker infrastructure. Let
+[26-03-04 00:49:24] me move on to tests.
+[26-03-04 00:50:55] TypeScript passes. Now run tests.
+[26-03-04 00:51:11] The issue is the mock returns `Buffer` but the code expects
+[26-03-04 00:51:11] `string` (due to `encoding: 'utf-8'`). Let me fix the test
+[26-03-04 00:51:11] mocks.
+[26-03-04 00:51:17] Now update all other `Buffer.from()` returns in the test
+[26-03-04 00:51:17] file.
+[26-03-04 00:51:27] Also need to fix the `isDockerAvailable` test - that one
+[26-03-04 00:51:27] uses `stdio: 'ignore'` so `execSync` returns a Buffer by
+[26-03-04 00:51:27] default, but since we're mocking at the module level our
+[26-03-04 00:51:27] mock returns whatever we set. Let me also check the test for
+[26-03-04 00:51:27] `isDockerAvailable`:
+[26-03-04 00:51:30] Good, that looks fine now. Let me run the tests again.
+[26-03-04 00:51:53] One test failing because `mockReturnValue` reuses the same
+[26-03-04 00:51:53] child process object (with already-closed streams). Need to
+[26-03-04 00:51:53] use `mockReturnValueOnce` for each call.
+[26-03-04 00:52:09] All 29 Docker tests pass. Now run the full test suite to
+[26-03-04 00:52:09] make sure nothing is broken.
+[26-03-04 00:52:24] All 277 tests pass across 9 test files. Now update the plan
+[26-03-04 00:52:24] and commit.
+[26-03-04 00:52:52] Task 1 committed. Remaining uncompleted sections in the
+[26-03-04 00:52:52] plan: Tasks 2, 3, 4, and 5 all have `[ ]` checkboxes.
+[26-03-04 00:52:52] Stopping here for the loop to handle the next section.
+
+--- task iteration 2 ---
+[26-03-04 00:52:57] I'll start by reading the plan file and the progress file to
+[26-03-04 00:52:57] understand the current state.
+[26-03-04 00:53:04] TASK 2: Secret isolation via Docker env injection
+[26-03-04 00:53:04] This task adds support for injecting secrets from
+[26-03-04 00:53:04] config.json into Docker containers as environment variables,
+[26-03-04 00:53:04] keeping them off disk. It involves:
+[26-03-04 00:53:04]   - Parsing a secrets section from config.json
+[26-03-04 00:53:04]   - Passing secrets as --env flags to Docker containers
+[26-03-04 00:53:04]   - Adding a config.secrets field separate from config.env
+[26-03-04 00:53:04]   - Ensuring secrets are not visible to other contexts or
+[26-03-04 00:53:04] written to disk
+[26-03-04 00:53:04]   - Writing tests for all of the above
+[26-03-04 00:53:04] Key files: the context config types, the
+[26-03-04 00:53:04] DockerSessionManager, and tests.
+[26-03-04 00:53:04] Let me explore the current codebase to understand the
+[26-03-04 00:53:04] existing structure.
+[26-03-04 00:53:55] Good, I have a clear picture. Let me read the key files I
+[26-03-04 00:53:55] need to modify.
+[26-03-04 00:54:09] Now let me read the config tests to understand the existing
+[26-03-04 00:54:09] test patterns.
+[26-03-04 00:54:18] Now let me implement all the code changes. Starting with the
+[26-03-04 00:54:18] schema update in types.ts.
+[26-03-04 00:54:25] Now update the DockerSessionManager to inject secrets as
+[26-03-04 00:54:25] --env flags to Docker and NOT pass them through stdin/worker
+[26-03-04 00:54:25] input.
+[26-03-04 00:54:35] Now update the ContextManager to deep-merge secrets in
+[26-03-04 00:54:35] updateConfig.
+[26-03-04 00:54:44] Now add tests. I'll add secret isolation tests to the Docker
+[26-03-04 00:54:44] test file and config tests.
+[26-03-04 00:55:06] Now add config tests for the secrets field.
+[26-03-04 00:55:17] Now run TypeScript check and tests.
+[26-03-04 00:55:40] All 285 tests pass (277 + 8 new ones). TypeScript also
+[26-03-04 00:55:40] passes clean.
+[26-03-04 00:55:45] Now update the plan file to mark Task 2 checkboxes as done
+[26-03-04 00:55:45] and commit.
+[26-03-04 00:56:06] Task 2 complete. Remaining uncompleted sections: Tasks 3, 4,
+[26-03-04 00:56:06] and 5 all have [ ] checkboxes. Stopping here for the loop to
+[26-03-04 00:56:06] handle the next section.
+
+--- task iteration 3 ---
+[26-03-04 00:56:20] TASK 3: Network isolation
+[26-03-04 00:56:20] This task adds network isolation controls to Docker
+[26-03-04 00:56:20] containers per context policy. It involves:
+[26-03-04 00:56:20]   - Adding a network config option with three modes: "none"
+[26-03-04 00:56:20] (air-gapped), "restricted" (whitelist), and "full"
+[26-03-04 00:56:20]   - Defaulting to no network access for maximum security
+[26-03-04 00:56:20]   - Using Docker network policies for enforcement
+[26-03-04 00:56:20]   - Writing tests for all network isolation modes
+[26-03-04 00:56:20] Key files: the context config types (types.ts),
+[26-03-04 00:56:20] DockerSessionManager, and Docker test files.
+[26-03-04 00:56:20] Let me explore the current codebase to understand the
+[26-03-04 00:56:20] existing structure.
+[26-03-04 00:57:11] Good, I have a clear picture. Let me read the key files I
+[26-03-04 00:57:11] need to modify.
+[26-03-04 01:00:07] Let me add the network config fields to types.ts.
+[26-03-04 01:00:14] Now update the startContainer method to handle network
+[26-03-04 01:00:14] modes.
+[26-03-04 01:00:31] Now add the network management methods. I'll add them after
+[26-03-04 01:00:31] the `stopContainer` method.
+[26-03-04 01:00:52] Good, the only diagnostic is a pre-existing unused parameter
+[26-03-04 01:00:52] warning. Now let me add the network isolation tests.
+[26-03-04 01:01:28] Now let me run TypeScript check and tests.
+[26-03-04 01:01:35] TypeScript passes. Now run tests.
+[26-03-04 01:01:51] All 295 tests pass (285 previous + 10 new network isolation
+[26-03-04 01:01:51] tests). Now let me update the plan and commit.
+[26-03-04 01:02:17] Task 3 complete. Remaining uncompleted sections in the plan:
+[26-03-04 01:02:17] Tasks 4 and 5 still have [ ] checkboxes. Stopping here for
+[26-03-04 01:02:17] the loop to handle the next section.
+
+--- task iteration 4 ---
+[26-03-04 01:02:29] TASK 4: Resource limits
+[26-03-04 01:02:29] This task adds CPU, memory, and disk limits per context to
+[26-03-04 01:02:29] Docker containers. It involves:
+[26-03-04 01:02:29]   - Adding a config.resources field with cpus, memoryMb, and
+[26-03-04 01:02:29] diskMb options to config.json schema
+[26-03-04 01:02:29]   - Mapping these to Docker flags: --cpus, --memory,
+[26-03-04 01:02:29] --storage-opt
+[26-03-04 01:02:29]   - Setting sensible defaults: 2 CPUs, 2GB memory, 1GB disk
+[26-03-04 01:02:29]   - Killing containers that exceed limits
+[26-03-04 01:02:29]   - Writing tests for resource limit enforcement
+[26-03-04 01:02:29] Key files: src/types.ts (config schema), src/docker/
+[26-03-04 01:02:29] (DockerSessionManager), and tests.
+[26-03-04 01:02:29] Let me explore the current code to understand what needs to
+[26-03-04 01:02:29] change.
+[26-03-04 01:03:16] Good, I have a clear picture of the codebase. Let me read
+[26-03-04 01:03:16] the key files I need to modify.
+[26-03-04 01:03:21] Now let me read the existing test file to understand
+[26-03-04 01:03:21] patterns.
+[26-03-04 01:03:36] Now let me implement the changes. Starting with the types
+[26-03-04 01:03:36] schema.
+[26-03-04 01:03:49] Now add default resource limits.
+[26-03-04 01:04:01] Now map resource limits to Docker flags in startContainer().
+[26-03-04 01:04:01] Docker's OOM killer automatically kills containers that
+[26-03-04 01:04:01] exceed memory limits, so we just need to set the flags.
+[26-03-04 01:04:38] Now add deep merge for resources in context.ts.
+[26-03-04 01:04:43] Now add tests for resource limit enforcement. I'll add a new
+[26-03-04 01:04:43] describe block to the Docker test file.
+[26-03-04 01:05:07] Now run TypeScript check and tests.
+[26-03-04 01:05:14] TypeScript passes. Now run the tests.
+[26-03-04 01:05:30] All 300 tests pass (295 previous + 5 new resource limit
+[26-03-04 01:05:30] tests). TypeScript also passes clean.
+[26-03-04 01:05:38] Now update the plan file to mark Task 4 checkboxes as done.
+[26-03-04 01:05:44] Now commit all changes.
+[26-03-04 01:06:02] Task 4 complete. Remaining uncompleted section: Task 5
+[26-03-04 01:06:02] (Fallback mode) still has [ ] checkboxes. Stopping here for
+[26-03-04 01:06:02] the loop to handle the next section.
+
+--- task iteration 5 ---
+[26-03-04 01:06:19] TASK 5: Fallback mode (no Docker)
+[26-03-04 01:06:19] This is the final task in the session isolation plan. It
+[26-03-04 01:06:19] adds a config.isolation option ("docker" | "process") so the
+[26-03-04 01:06:19] system can run in either mode. Process mode keeps the
+[26-03-04 01:06:19] current behavior (cwd-based, no real isolation) while Docker
+[26-03-04 01:06:19] mode uses full container isolation. Auto-detection picks
+[26-03-04 01:06:19] Docker if available and falls back to process mode. The
+[26-03-04 01:06:19] session manager interface stays the same so callers don't
+[26-03-04 01:06:19] need to know which implementation is active. Tests verify
+[26-03-04 01:06:19] both modes produce equivalent results.
+[26-03-04 01:06:19] Key files: src/types.ts (config schema),
+[26-03-04 01:06:19] src/docker/DockerSessionManager.ts, src/session/ (session
+[26-03-04 01:06:19] manager), and test files.
+[26-03-04 01:06:19] Let me explore the current codebase structure.
+[26-03-04 01:07:18] Good, I have a clear picture. Let me read the key files I
+[26-03-04 01:07:18] need to modify.
+[26-03-04 01:07:23] Now let me look at the test files and the context manager
+[26-03-04 01:07:23] for the deep merge pattern.
+[26-03-04 01:07:43] Adding the `isolation` field to the config schema.
+[26-03-04 01:07:57] Now I'll create the ISessionManager interface and the
+[26-03-04 01:07:57] factory function. Let me check what directory structure
+[26-03-04 01:07:57] exists.
+[26-03-04 01:08:02] I'll create a session interface file and a factory function
+[26-03-04 01:08:02] that handles auto-detection.
+[26-03-04 01:08:10] Now create the factory function that auto-detects Docker
+[26-03-04 01:08:10] availability and picks the right implementation.
+[26-03-04 01:08:23] Now update index.ts to use the ISessionManager interface and
+[26-03-04 01:08:23] the factory function.
+[26-03-04 01:08:27] Now update the AppDeps interface to use ISessionManager
+[26-03-04 01:08:27] instead of the concrete SessionManager.
+[26-03-04 01:08:31] Now update the server startup section to use the factory
+[26-03-04 01:08:31] with auto-detect.
+[26-03-04 01:08:36] Good. Now let me clean up the unused import. Since
+[26-03-04 01:08:36] `ISessionManager` is used in AppDeps and
+[26-03-04 01:08:36] `createSessionManager`/`IsolationMode` are used in the
+[26-03-04 01:08:36] startup section, they should all be used now. Let me verify.
+[26-03-04 01:08:38] `SessionManager` import is no longer needed directly since
+[26-03-04 01:08:38] we're using the factory.
+[26-03-04 01:08:42] Now let me check if there are any other files that import
+[26-03-04 01:08:42] SessionManager directly that need to be updated to use the
+[26-03-04 01:08:42] interface.
+[26-03-04 01:08:47] Good, only the factory file and test files import the
+[26-03-04 01:08:47] concrete classes. The main app uses the interface. Now let
+[26-03-04 01:08:47] me also check if any tests import from index to make sure
+[26-03-04 01:08:47] they won't break.
+[26-03-04 01:08:50] Let me check how these test files construct the
+[26-03-04 01:08:50] SessionManager for the AppDeps.
+[26-03-04 01:08:56] These tests create `new SessionManager(...)` directly which
+[26-03-04 01:08:56] is fine -- they still work because `SessionManager`
+[26-03-04 01:08:56] implements `ISessionManager` implicitly (duck typing in
+[26-03-04 01:08:56] TypeScript). The `AppDeps` type now accepts
+[26-03-04 01:08:56] `ISessionManager` which `SessionManager` satisfies. Let me
+[26-03-04 01:08:56] verify this compiles by checking the test imports.
+[26-03-04 01:09:01] Good -- `SessionManager` will satisfy the `ISessionManager`
+[26-03-04 01:09:01] interface because it has all the required methods.
+[26-03-04 01:09:01] TypeScript's structural typing handles this.
+[26-03-04 01:09:07] Now let me write the tests. I need to test:
+[26-03-04 01:09:07]   1. The factory creates the correct manager based on mode
+[26-03-04 01:09:07]   2. Auto-detect picks Docker when available, process
+[26-03-04 01:09:07] otherwise
+[26-03-04 01:09:07]   3. Both modes implement the same interface (same method
+[26-03-04 01:09:07] signatures)
+[26-03-04 01:09:07]   4. The isolation config field is valid
+[26-03-04 01:09:35] Now run TypeScript check and tests.
+[26-03-04 01:09:44] TypeScript passes. Now run the tests.
+[26-03-04 01:09:58] All 316 tests pass (300 previous + 16 new factory tests).
+[26-03-04 01:09:58] TypeScript also passes.
+[26-03-04 01:10:05] Now update the plan file to mark Task 5 checkboxes as done.
+[26-03-04 01:10:12] Now commit all changes.
+[26-03-04 01:10:32] Now let me verify there are no remaining uncompleted
+[26-03-04 01:10:32] checkboxes in the plan.
+[26-03-04 01:10:36] No remaining uncompleted checkboxes in the plan. All tasks
+[26-03-04 01:10:36] are done.
+[26-03-04 01:10:36] ALL_TASKS_DONE
+
+all tasks completed, starting code review...
+[26-03-04 01:10:36] task execution completed successfully
+moved plan to /Users/hormold/projects/claude-runner/docs/plans/completed/session-isolation.md
+
+completed in 25m15s (46 files, +8873/-429 lines)

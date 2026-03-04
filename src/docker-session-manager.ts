@@ -5,7 +5,7 @@ import { join, resolve } from 'path';
 import type { ContextConfig } from './types.js';
 import type { ContextManager } from './context.js';
 import { HistoryManager } from './history.js';
-import type { McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-code';
+import type { McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-agent-sdk';
 
 const CONTAINER_PREFIX = 'claude-ctx-';
 const DOCKER_IMAGE = 'claude-runner-context';
@@ -600,7 +600,7 @@ export class DockerSessionManager extends EventEmitter {
  * Reads JSON from stdin, calls the Claude Code SDK, writes JSON to stdout.
  */
 const WORKER_SCRIPT = `
-import { query } from '@anthropic-ai/claude-code';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 let data = '';
 process.stdin.setEncoding('utf-8');
