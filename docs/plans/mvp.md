@@ -74,13 +74,13 @@ Rewrite `src/index.ts` with input validation, proper HTTP status codes, CORS, re
 ### Task 7: CLI client for quick testing
 Create a simple CLI client `src/cli.ts` for interacting with the server from terminal.
 
-- [ ] `claude-runner create <contextId> [--agents-md file] [--config file]`
-- [ ] `claude-runner task <contextId> <prompt> [--webhook url] [--wait]`
-- [ ] `claude-runner status <taskId>`
-- [ ] `claude-runner contexts`
-- [ ] `claude-runner delete <contextId>`
-- [ ] Add `"bin"` entry in package.json
-- [ ] `--wait` flag polls until task completes and prints result
+- [x] `claude-runner create <contextId> [--agents-md file] [--config file]`
+- [x] `claude-runner task <contextId> <prompt> [--webhook url] [--wait]`
+- [x] `claude-runner status <taskId>`
+- [x] `claude-runner contexts`
+- [x] `claude-runner delete <contextId>`
+- [x] Add `"bin"` entry in package.json
+- [x] `--wait` flag polls until task completes and prints result
 
 ### Task 8: Default template and example context
 Create a useful default template and an example context showing MCP + tools integration.

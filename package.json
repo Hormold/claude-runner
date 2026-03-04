@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Orchestrator for running Claude Code as a service with persistent file-based context",
   "type": "module",
+  "bin": {
+    "claude-runner": "./dist/cli.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
