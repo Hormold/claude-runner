@@ -50,8 +50,12 @@ function initSession(sessionId) {
     mkdirSync(join(dir, 'data'), { recursive: true });
     mkdirSync(join(dir, '.claude'), { recursive: true });
 
-    // Copy AGENTS.md from template
+    // Copy template files
     cpSync(join(TEMPLATE_DIR, 'AGENTS.md'), join(dir, 'AGENTS.md'));
+    const outputSrc = join(TEMPLATE_DIR, 'OUTPUT.md');
+    if (existsSync(outputSrc)) {
+      cpSync(outputSrc, join(dir, 'OUTPUT.md'));
+    }
 
     // Symlink tools/ so all sessions share the same tools (but can't modify them)
     const toolsSrc = join(TEMPLATE_DIR, 'tools');
@@ -90,8 +94,15 @@ export async function ask(sessionId, message, context) {
   const state = loadState(sessionId);
   const resumed = !!state;
 
-  // System prompt from session's own AGENTS.md
-  const systemPrompt = readFileSync(join(dir, 'AGENTS.md'), 'utf-8');
+  // System prompt from session's own AGENTS.md + OUTPUT.md
+  let systemPrompt = readFileSync(join(dir, 'AGENTS.md'), 'utf-8');
+
+  // Append OUTPUT.md instructions if present
+  const outputMdPath = join(dir, 'OUTPUT.md');
+  if (existsSync(outputMdPath)) {
+    const outputInstructions = readFileSync(outputMdPath, 'utf-8');
+    systemPrompt += '\n\n---\n\n' + outputInstructions;
+  }
 
   // Build prompt
   let fullPrompt = '';
@@ -134,6 +145,20 @@ export async function ask(sessionId, message, context) {
     }
   }
 
+  // Parse structured output if OUTPUT.md exists
+  let output = null;
+  if (existsSync(outputMdPath) && result) {
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        output = JSON.parse(jsonMatch[0]);
+      }
+    } catch {
+      // Not valid JSON — will be returned as plain text
+    }
+  }
+
   // Save state
   saveState(sessionId, {
     sdkSessionId,
@@ -146,7 +171,7 @@ export async function ask(sessionId, message, context) {
     console.log(`[session:${sessionId}] Tools: ${tools.join(', ')}`);
   }
 
-  return { response: result, sessionId, sdkSessionId, cost, duration, resumed };
+  return { response: result, output, sessionId, sdkSessionId, cost, duration, resumed };
 }
 
 /** List all sessions */
