@@ -625,6 +625,134 @@ describe('DockerSessionManager', () => {
     });
   });
 
+  // ── secret isolation ──
+
+  describe('secret isolation via Docker env injection', () => {
+    it('injects secrets as -e flags in docker run', async () => {
+      contextManager.create('test-ctx', undefined, {
+        secrets: { API_KEY: 'secret-123', DB_PASS: 'pass-456' },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      expect(runCall).toBeDefined();
+      const cmd = runCall![0] as string;
+
+      expect(cmd).toContain('-e API_KEY=secret-123');
+      expect(cmd).toContain('-e DB_PASS=pass-456');
+    });
+
+    it('does not inject secrets into worker input JSON (not on disk)', async () => {
+      contextManager.create('test-ctx', undefined, {
+        secrets: { SECRET_TOKEN: 'top-secret' },
+      });
+
+      let capturedInput: any;
+      const child = createMockChildProcess(JSON.stringify({ result: 'ok' }) + '\n') as any;
+      const originalWrite = child.stdin._write;
+      child.stdin._write = (chunk: any, enc: string, cb: () => void) => {
+        capturedInput = JSON.parse(chunk.toString());
+        originalWrite.call(child.stdin, chunk, enc, cb);
+      };
+      mockSpawn.mockReturnValue(child as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      expect(capturedInput).toBeDefined();
+      // Secrets should NOT appear in the worker input (which is sent via stdin)
+      expect(capturedInput.secrets).toBeUndefined();
+    });
+
+    it('does not add -e flags when no secrets configured', async () => {
+      contextManager.create('test-ctx');
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+
+      // No -e flags should be present (other than what Docker adds by default)
+      const eFlags = cmd.split(' ').filter((arg, i, arr) => arg === '-e' && i < arr.length - 1);
+      expect(eFlags).toHaveLength(0);
+    });
+
+    it('secrets are isolated between different contexts', async () => {
+      contextManager.create('ctx-a', undefined, {
+        secrets: { KEY_A: 'value-a' },
+      });
+      contextManager.create('ctx-b', undefined, {
+        secrets: { KEY_B: 'value-b' },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn
+        .mockReturnValueOnce(createMockChildProcess(workerOutput + '\n') as any)
+        .mockReturnValueOnce(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('ctx-a', 'test', 'task-1');
+      await dockerManager.executeTask('ctx-b', 'test', 'task-2');
+
+      const runCalls = mockExecSync.mock.calls.filter(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+
+      // Each context gets its own container with its own secrets
+      expect(runCalls.length).toBe(2);
+      const cmdA = runCalls[0][0] as string;
+      const cmdB = runCalls[1][0] as string;
+
+      // Context A has KEY_A but not KEY_B
+      expect(cmdA).toContain('-e KEY_A=value-a');
+      expect(cmdA).not.toContain('KEY_B');
+
+      // Context B has KEY_B but not KEY_A
+      expect(cmdB).toContain('-e KEY_B=value-b');
+      expect(cmdB).not.toContain('KEY_A');
+    });
+
+    it('keeps env and secrets separate', async () => {
+      contextManager.create('test-ctx', undefined, {
+        env: { NODE_ENV: 'production' },
+        secrets: { API_KEY: 'secret-key' },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      let capturedInput: any;
+      const child = createMockChildProcess(workerOutput + '\n') as any;
+      const originalWrite = child.stdin._write;
+      child.stdin._write = (chunk: any, enc: string, cb: () => void) => {
+        capturedInput = JSON.parse(chunk.toString());
+        originalWrite.call(child.stdin, chunk, enc, cb);
+      };
+      mockSpawn.mockReturnValue(child as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+
+      // Secrets injected via Docker -e flags
+      expect(cmd).toContain('-e API_KEY=secret-key');
+
+      // Env vars passed through worker input (SDK env option), not Docker -e
+      expect(capturedInput).toBeDefined();
+      expect(capturedInput.env).toEqual({ NODE_ENV: 'production' });
+    });
+  });
+
   // ── abortAll ──
 
   describe('abortAll', () => {

@@ -124,6 +124,28 @@ describe('parseConfig', () => {
     ).toThrow();
   });
 
+  it('accepts config with secrets field', () => {
+    const result = parseConfig({
+      secrets: { API_KEY: 'sk-123', DB_PASS: 'secret' },
+    });
+    expect(result.secrets).toEqual({ API_KEY: 'sk-123', DB_PASS: 'secret' });
+  });
+
+  it('keeps env and secrets separate', () => {
+    const result = parseConfig({
+      env: { NODE_ENV: 'production' },
+      secrets: { API_KEY: 'sk-123' },
+    });
+    expect(result.env).toEqual({ NODE_ENV: 'production' });
+    expect(result.secrets).toEqual({ API_KEY: 'sk-123' });
+  });
+
+  it('rejects secrets with non-string values', () => {
+    expect(() =>
+      parseConfig({ secrets: { KEY: 123 } }),
+    ).toThrow();
+  });
+
   it('rejects tools.allowedCommands with non-string items', () => {
     expect(() =>
       parseConfig({ tools: { allowedCommands: [123] } }),

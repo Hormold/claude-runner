@@ -135,6 +135,7 @@ export class ContextManager {
       ...partial,
       // Deep merge nested objects so partial updates don't wipe existing entries
       env: partial.env ? { ...current.env, ...partial.env } : current.env,
+      secrets: partial.secrets ? { ...current.secrets, ...partial.secrets } : current.secrets,
       mcpServers: partial.mcpServers ? { ...current.mcpServers, ...partial.mcpServers } : current.mcpServers,
       tools: partial.tools ? { ...current.tools, ...partial.tools } : current.tools,
     });

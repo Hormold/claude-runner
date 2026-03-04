@@ -269,7 +269,7 @@ export class DockerSessionManager extends EventEmitter {
   private startContainer(
     containerName: string,
     absWorkDir: string,
-    _config: ContextConfig,
+    config: ContextConfig,
   ): string {
     const args = [
       'run', '-d',
@@ -279,8 +279,16 @@ export class DockerSessionManager extends EventEmitter {
       '--security-opt', 'no-new-privileges:true',
       '--network', 'none',
       '-v', `${absWorkDir}:/workspace`,
-      DOCKER_IMAGE,
     ];
+
+    // Inject secrets as container env vars (not written to disk)
+    if (config.secrets) {
+      for (const [key, value] of Object.entries(config.secrets)) {
+        args.push('-e', `${key}=${value}`);
+      }
+    }
+
+    args.push(DOCKER_IMAGE);
 
     const output = execSync(`docker ${args.join(' ')}`, {
       encoding: 'utf-8',

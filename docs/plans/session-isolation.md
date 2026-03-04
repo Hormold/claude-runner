@@ -24,11 +24,11 @@ Replace process-based Claude Code execution with Docker containers per context.
 ### Task 2: Secret isolation via Docker env injection
 Secrets from config.json injected as container env vars, not written to disk.
 
-- [ ] Parse `config.json` secrets section
-- [ ] Pass as `--env` flags to Docker (not in Dockerfile or mounted files)
-- [ ] Secrets not visible to other contexts (separate containers)
-- [ ] Add `config.secrets` field (separate from `config.env` for clarity)
-- [ ] Write tests: secrets available inside container, not on disk, not in other contexts
+- [x] Parse `config.json` secrets section
+- [x] Pass as `--env` flags to Docker (not in Dockerfile or mounted files)
+- [x] Secrets not visible to other contexts (separate containers)
+- [x] Add `config.secrets` field (separate from `config.env` for clarity)
+- [x] Write tests: secrets available inside container, not on disk, not in other contexts
 
 ### Task 3: Network isolation
 Restrict container network access per context policy.
