@@ -50,6 +50,7 @@ export class HistoryManager {
    * Get the most recent N turns.
    */
   getRecent(limit = 20): HistoryTurn[] {
+    if (limit === 0) return [];
     const all = this.readAll();
     return all.slice(-limit);
   }

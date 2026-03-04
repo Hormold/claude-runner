@@ -206,18 +206,25 @@ describe('SessionManager', () => {
       expect(turns[1].taskId).toBe('task-1');
     });
 
-    it('includes history context in prompt for subsequent tasks', async () => {
+    it('includes history context in prompt for fresh sessions (no sessionId)', async () => {
       contextManager.create('test-ctx');
 
-      // First task
+      // First task - no session exists, so no history to inject
       mockQuery.mockReturnValue(createMockStream([
-        successResult('First answer'),
+        // Return result without session_id so session resume won't trigger
+        { type: 'result', subtype: 'success', result: 'First answer', session_id: undefined,
+          duration_ms: 100, duration_api_ms: 80, is_error: false, num_turns: 1,
+          total_cost_usd: 0.01, usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          modelUsage: {}, permission_denials: [] },
       ]));
       await sessionManager.executeTask('test-ctx', 'First question', 'task-1');
 
-      // Second task
+      // Second task - no sessionId stored, so history is injected manually
       mockQuery.mockReturnValue(createMockStream([
-        successResult('Second answer'),
+        { type: 'result', subtype: 'success', result: 'Second answer', session_id: undefined,
+          duration_ms: 100, duration_api_ms: 80, is_error: false, num_turns: 1,
+          total_cost_usd: 0.01, usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+          modelUsage: {}, permission_denials: [] },
       ]));
       await sessionManager.executeTask('test-ctx', 'Second question', 'task-2');
 
@@ -225,6 +232,27 @@ describe('SessionManager', () => {
       expect(secondCall.prompt).toContain('Previous conversation context');
       expect(secondCall.prompt).toContain('First question');
       expect(secondCall.prompt).toContain('Second question');
+    });
+
+    it('skips manual history injection when resuming a session', async () => {
+      contextManager.create('test-ctx');
+
+      // First task - returns a session_id for resume
+      mockQuery.mockReturnValue(createMockStream([
+        successResult('First answer'),
+      ]));
+      await sessionManager.executeTask('test-ctx', 'First question', 'task-1');
+
+      // Second task - session has sessionId, so history is NOT injected
+      mockQuery.mockReturnValue(createMockStream([
+        successResult('Second answer'),
+      ]));
+      await sessionManager.executeTask('test-ctx', 'Second question', 'task-2');
+
+      const secondCall = mockQuery.mock.calls[1][0];
+      expect(secondCall.prompt).toBe('Second question');
+      expect(secondCall.prompt).not.toContain('Previous conversation context');
+      expect(secondCall.options?.resume).toBe('session-123');
     });
 
     it('loads AGENTS.md as system prompt', async () => {

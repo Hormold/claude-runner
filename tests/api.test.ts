@@ -391,9 +391,11 @@ describe('REST API', () => {
       const origLog = console.log;
       console.log = (...args: any[]) => { logs.push(args.join(' ')); };
 
-      await request(app).get('/api/health');
-
-      console.log = origLog;
+      try {
+        await request(app).get('/api/health');
+      } finally {
+        console.log = origLog;
+      }
       expect(logs.some(l => l.includes('[http]') && l.includes('GET') && l.includes('/api/health'))).toBe(true);
     });
   });

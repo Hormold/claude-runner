@@ -230,7 +230,7 @@ export async function main(argv: string[] = process.argv.slice(2)) {
 }
 
 // Run when executed directly
-const isMain = process.argv[1]?.includes('cli');
+const isMain = process.argv[1]?.endsWith('/cli.ts') || process.argv[1]?.endsWith('/cli.js');
 if (isMain) {
   main().catch(err => {
     console.error(err.message || err);

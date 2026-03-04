@@ -2,11 +2,13 @@ import Database from 'better-sqlite3';
 import { Task, TaskStatus } from './types.js';
 import { v4 as uuid } from 'uuid';
 import path from 'path';
+import fs from 'fs';
 
 export class TaskQueue {
   private db: Database.Database;
 
   constructor(dataDir: string) {
+    fs.mkdirSync(dataDir, { recursive: true });
     this.db = new Database(path.join(dataDir, 'queue.db'));
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');

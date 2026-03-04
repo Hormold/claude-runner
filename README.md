@@ -6,12 +6,14 @@ Each context gets its own isolated workspace with a custom persona (AGENTS.md), 
 
 ## Quick Start
 
+Requires Node.js >= 18.0.0.
+
 ```bash
 npm install
 npm run dev
 ```
 
-Server starts at `http://localhost:3456`.
+Server starts at `http://localhost:3456`. Task queue data is stored in `.data/queue.db` (SQLite).
 
 ## CLI
 
@@ -127,7 +129,10 @@ Returns server status, context count, active sessions, and queue statistics.
   "status": "ok",
   "contexts": 3,
   "activeSessions": ["my-project"],
-  "queueStats": { "queued": 2, "running": 1, "completed": 15, "failed": 0 }
+  "queueStats": {
+    "counts": { "queued": 2, "running": 1, "completed": 15, "failed": 0 },
+    "oldestQueuedAge": 45000
+  }
 }
 ```
 
@@ -352,6 +357,8 @@ Key design decisions:
 - Parallel across contexts: different contexts execute simultaneously
 - Session reuse: idle sessions are kept warm and resumed via SDK
 - File-based context: inspectable, editable, versionable with git
+
+**Security note:** Claude Code sessions run with `permissionMode: 'bypassPermissions'`, meaning agents can execute shell commands and write files without interactive prompts. This is by design for headless/server operation. Deploy behind authentication and only accept trusted prompts, or sandbox at the container level.
 
 ## Connectors
 

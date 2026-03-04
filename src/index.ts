@@ -26,7 +26,15 @@ const CreateContextSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
-const UpdateConfigSchema = z.record(z.string(), z.unknown());
+const UpdateConfigSchema = z.object({
+  model: z.string().min(1).optional(),
+  maxTurns: z.number().int().positive().optional(),
+  historyWindow: z.number().int().nonnegative().optional(),
+  idleTimeoutMs: z.number().int().positive().optional(),
+  maxConcurrentSessions: z.number().int().positive().optional(),
+  executionTimeoutMs: z.number().int().positive().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+}).strict();
 
 function paramStr(val: string | string[] | undefined): string {
   return Array.isArray(val) ? val[0] : val ?? '';
@@ -48,16 +56,27 @@ export function createApp(deps: AppDeps) {
   app.use(express.json());
 
   // ── CORS middleware ──
-  app.use((_req: Request, res: Response, next: NextFunction) => {
-    const origin = corsOrigins
-      ? Array.isArray(corsOrigins)
-        ? corsOrigins.join(', ')
-        : corsOrigins
-      : '*';
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    let origin: string;
+    if (!corsOrigins || corsOrigins === '*') {
+      origin = '*';
+    } else if (Array.isArray(corsOrigins)) {
+      const requestOrigin = req.headers.origin;
+      if (requestOrigin && corsOrigins.includes(requestOrigin)) {
+        origin = requestOrigin;
+        res.setHeader('Vary', 'Origin');
+      } else {
+        origin = '';
+      }
+    } else {
+      origin = corsOrigins;
+    }
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (_req.method === 'OPTIONS') {
+    if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
     }
@@ -82,12 +101,16 @@ export function createApp(deps: AppDeps) {
     processing = true;
 
     try {
+      const dispatched = new Set<string>();
       while (true) {
         const runningContexts = sessionManager.getRunningContexts();
+        // Merge in-flight dispatched contexts that haven't registered in SessionManager yet
+        for (const ctx of dispatched) runningContexts.add(ctx);
         const task = queue.nextAvailable(runningContexts);
         if (!task) break;
 
         queue.markRunning(task.id);
+        dispatched.add(task.contextId);
         console.log(`[queue] Running task ${task.id} for context '${task.contextId}'`);
 
         executeTask(task.id, task.contextId, task.prompt, task.webhook).catch(err => {
@@ -314,7 +337,14 @@ if (isMainModule()) {
   const queue = new TaskQueue(DATA_DIR);
   const contextManager = new ContextManager(CONTEXTS_DIR);
   const sessionManager = new SessionManager(contextManager);
-  sessionManager.registerCleanupHandlers();
+  // Expire any stuck tasks from previous crashes
+  queue.expireStuckTasks();
+
+  // Periodic maintenance: expire stuck tasks every 5 minutes, cleanup old tasks every hour
+  const expireInterval = setInterval(() => queue.expireStuckTasks(), 5 * 60 * 1000);
+  const cleanupInterval = setInterval(() => queue.cleanup(24 * 60 * 60 * 1000), 60 * 60 * 1000);
+  expireInterval.unref();
+  cleanupInterval.unref();
 
   const corsOrigins = process.env.CORS_ORIGINS || '*';
   const { app } = createApp({ queue, contextManager, sessionManager, corsOrigins });
@@ -351,8 +381,8 @@ if (isMainModule()) {
       console.log('[shutdown] Server closed');
     });
 
-    // Kill sessions and close queue
-    sessionManager.killAll();
+    // Abort running tasks, kill sessions, close queue
+    sessionManager.abortAll();
     queue.close();
 
     // Give in-flight requests a moment to finish

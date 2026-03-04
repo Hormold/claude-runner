@@ -22,7 +22,6 @@ export class SessionManager extends EventEmitter {
   private running = new Set<string>();
   private contextManager: ContextManager;
   private maxConcurrent: number;
-  private cleanupRegistered = false;
   private abortControllers = new Map<string, AbortController>();
 
   constructor(contextManager: ContextManager, maxConcurrent?: number) {
@@ -32,24 +31,15 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Register SIGINT/SIGTERM handlers for graceful cleanup.
-   * Call once during server startup.
+   * Abort all running tasks and clean up sessions.
+   * Called during graceful shutdown.
    */
-  registerCleanupHandlers(): void {
-    if (this.cleanupRegistered) return;
-    this.cleanupRegistered = true;
-
-    const cleanup = () => {
-      // Abort all running tasks
-      for (const [contextId, controller] of this.abortControllers) {
-        controller.abort();
-        this.abortControllers.delete(contextId);
-      }
-      this.killAll();
-    };
-
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
+  abortAll(): void {
+    for (const [, controller] of this.abortControllers) {
+      controller.abort();
+    }
+    this.abortControllers.clear();
+    this.killAll();
   }
 
   isRunning(contextId: string): boolean {
@@ -109,12 +99,18 @@ export class SessionManager extends EventEmitter {
       });
 
       // Build the full prompt with history context
-      const historyWindow = config.historyWindow ?? 20;
-      const previousTurns = history.getRecent(historyWindow);
-      // Remove the last turn (the one we just added)
-      previousTurns.pop();
-
-      const fullPrompt = this.buildPromptWithHistory(prompt, previousTurns);
+      // Skip manual history injection when resuming a session (SDK replays it automatically)
+      const session = this.sessions.get(contextId);
+      let fullPrompt: string;
+      if (session?.sessionId) {
+        fullPrompt = prompt;
+      } else {
+        const historyWindow = config.historyWindow ?? 20;
+        const previousTurns = history.getRecent(historyWindow);
+        // Remove the last turn (the one we just added)
+        previousTurns.pop();
+        fullPrompt = this.buildPromptWithHistory(prompt, previousTurns);
+      }
 
       // Build MCP config
       const mcpServers = this.buildMcpConfig(config);
@@ -127,7 +123,6 @@ export class SessionManager extends EventEmitter {
       this.abortControllers.set(contextId, abortController);
 
       // Build options
-      const session = this.sessions.get(contextId);
       const options: Options = {
         model: config.model ?? 'claude-sonnet-4-20250514',
         maxTurns: config.maxTurns ?? 50,
