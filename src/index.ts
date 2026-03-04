@@ -4,8 +4,9 @@ import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { TaskQueue } from './queue.js';
 import { ContextManager } from './context.js';
-import { SessionManager } from './session-manager.js';
 import { McpServerConfigSchema } from './types.js';
+import type { ISessionManager } from './session-interface.js';
+import { createSessionManager, type IsolationMode } from './session-factory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -50,7 +51,7 @@ function paramStr(val: string | string[] | undefined): string {
 export interface AppDeps {
   queue: TaskQueue;
   contextManager: ContextManager;
-  sessionManager: SessionManager;
+  sessionManager: ISessionManager;
   corsOrigins?: string | string[];
 }
 
@@ -359,7 +360,8 @@ function isMainModule(): boolean {
 if (isMainModule()) {
   const queue = new TaskQueue(DATA_DIR);
   const contextManager = new ContextManager(CONTEXTS_DIR);
-  const sessionManager = new SessionManager(contextManager);
+  const isolationMode = (process.env.ISOLATION_MODE as IsolationMode | undefined) || undefined;
+  const sessionManager = createSessionManager(contextManager, isolationMode);
   // Expire any stuck tasks from previous crashes
   queue.expireStuckTasks();
 

@@ -52,9 +52,9 @@ CPU, memory, and disk limits per context.
 ### Task 5: Fallback mode (no Docker)
 Keep process-based execution as fallback for development/trusted environments.
 
-- [ ] `config.isolation: "docker" | "process"` option
-- [ ] Process mode: current behavior (cwd-based, no real isolation)
-- [ ] Docker mode: full container isolation
-- [ ] Auto-detect: use Docker if available, fallback to process
-- [ ] Session manager interface stays the same (swap implementation)
-- [ ] Write tests: both modes produce same results
+- [x] `config.isolation: "docker" | "process"` option
+- [x] Process mode: current behavior (cwd-based, no real isolation)
+- [x] Docker mode: full container isolation
+- [x] Auto-detect: use Docker if available, fallback to process
+- [x] Session manager interface stays the same (swap implementation)
+- [x] Write tests: both modes produce same results

@@ -33,6 +33,7 @@ export const ContextConfigSchema = z.object({
   idleTimeoutMs: z.number().int().positive().optional(),
   maxConcurrentSessions: z.number().int().positive().optional(),
   executionTimeoutMs: z.number().int().positive().optional(),
+  isolation: z.enum(['docker', 'process']).optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
   secrets: z.record(z.string(), z.string()).optional(),
