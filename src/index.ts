@@ -329,6 +329,14 @@ export function createApp(deps: AppDeps) {
     });
   });
 
+  // ── Global JSON error handler ──
+  // Catches unhandled errors (e.g. validateContextId throws) and returns JSON instead of HTML
+  app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
+    console.error(`[error] ${req.method} ${req.path}:`, err.message);
+    const status = err.message.includes('Invalid contextId') ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  });
+
   return { app, processQueue };
 }
 

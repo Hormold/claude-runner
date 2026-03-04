@@ -3,11 +3,14 @@ import { z } from 'zod';
 // ── MCP Server Config ──
 
 export const McpServerConfigSchema = z.object({
-  command: z.string().min(1),
+  command: z.string().min(1).optional(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
   url: z.string().url().optional(),
-});
+}).refine(
+  data => data.command || data.url,
+  { message: 'Either command or url must be provided' },
+);
 
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 

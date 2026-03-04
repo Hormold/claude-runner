@@ -280,7 +280,7 @@ export class SessionManager extends EventEmitter {
         } else {
           servers[name] = {
             type: 'stdio',
-            command: srv.command,
+            command: srv.command!,
             args: srv.args,
             env: { ...config.env, ...srv.env },
           };
