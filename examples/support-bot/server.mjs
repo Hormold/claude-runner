@@ -69,44 +69,7 @@ function saveState(sessionId, state) {
 
 // ── Container lifecycle ──
 
-const idleTimers = new Map(); // sessionId → timeout
-
 function containerName(sessionId) { return `agent-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}`; }
-
-function isContainerRunning(name) {
-  try {
-    const out = execSync(`docker inspect -f '{{.State.Running}}' ${name} 2>/dev/null`, { encoding: 'utf-8' }).trim();
-    return out === 'true';
-  } catch { return false; }
-}
-
-function startContainer(sessionId) {
-  const name = containerName(sessionId);
-  if (isContainerRunning(name)) return name;
-
-  // Kill stale container if exists
-  try { execSync(`docker rm -f ${name} 2>/dev/null`); } catch {}
-
-  const dir = resolve(getSessionDir(sessionId));
-  const apiKey = getApiKey();
-
-  const args = [
-    'run', '-d',
-    '--name', name,
-    '-v', `${dir}:/workspace`,
-    '-v', `${join(dir, '.claude')}:/home/runner/.claude`,
-    '-e', `ANTHROPIC_API_KEY=${apiKey}`,
-    '-e', 'NODE_PATH=/app/node_modules',
-    '-w', '/workspace',
-    '--entrypoint', 'tail',
-    DOCKER_IMAGE,
-    '-f', '/dev/null',
-  ];
-
-  execSync(`docker ${args.join(' ')}`, { encoding: 'utf-8' });
-  console.log(`[docker] Started: ${name}`);
-  return name;
-}
 
 function stopContainer(sessionId) {
   const name = containerName(sessionId);
@@ -116,22 +79,25 @@ function stopContainer(sessionId) {
   } catch {}
 }
 
-function resetIdleTimer(sessionId) {
-  if (idleTimers.has(sessionId)) clearTimeout(idleTimers.get(sessionId));
-  idleTimers.set(sessionId, setTimeout(() => {
-    console.log(`[idle] Stopping ${sessionId} after ${IDLE_TIMEOUT_MS / 1000}s idle`);
-    stopContainer(sessionId);
-    idleTimers.delete(sessionId);
-  }, IDLE_TIMEOUT_MS));
-}
+// ── Execute task in container (docker run per task, state in volumes) ──
 
-// ── Execute task in container ──
+function runInContainer(sessionId, script) {
+  const dir = resolve(getSessionDir(sessionId));
+  const apiKey = getApiKey();
+  const name = containerName(sessionId) + '-' + Date.now();
 
-function execInContainer(name, script) {
   return new Promise((resolve, reject) => {
     const child = spawn('docker', [
-      'exec', '-i', name,
-      'node', '--input-type=module', '-e', script,
+      'run', '--rm',
+      '--name', name,
+      '-v', `${dir}:/workspace`,
+      '-v', `${join(dir, '.claude')}:/home/runner/.claude`,
+      '-e', `CLAUDE_CODE_OAUTH_TOKEN=${apiKey}`,
+      '-e', 'NODE_PATH=/app/node_modules',
+      '-w', '/workspace',
+      '--entrypoint', 'node',
+      DOCKER_IMAGE,
+      '--input-type=module', '-e', script,
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let stdout = '', stderr = '';
@@ -139,12 +105,14 @@ function execInContainer(name, script) {
     child.stderr.on('data', d => stderr += d);
 
     child.on('close', (code) => {
-      if (code !== 0 && !stdout.trim()) {
+      // SDK may exit 1 due to telemetry failures — check if we got valid output
+      if (!stdout.trim()) {
         reject(new Error(`Exit ${code}: ${stderr.slice(-300)}`));
         return;
       }
       try {
-        resolve({ ...JSON.parse(stdout.trim()), tools: (stderr.match(/tool:\S+/g) || []).map(t => t.replace('tool:', '')) });
+        const tools = (stderr.match(/tool:\S+/g) || []).map(t => t.replace('tool:', ''));
+        resolve({ ...JSON.parse(stdout.trim()), tools });
       } catch {
         reject(new Error(`Bad output: ${stdout.slice(0, 200)}`));
       }
@@ -195,13 +163,9 @@ async function handleAsk(sessionId, message, context) {
   if (context) fullPrompt += `## Context\n${context}\n\n---\n\n`;
   fullPrompt += message;
 
-  // Start/reuse container
-  const name = startContainer(sessionId);
-  resetIdleTimer(sessionId);
-
-  // Execute
+  // Run in isolated container (docker run, state persisted via volumes)
   const script = buildScript(fullPrompt, systemPrompt, state?.sdkSessionId);
-  const raw = await execInContainer(name, script);
+  const raw = await runInContainer(sessionId, script);
 
   // Parse structured output
   let output = null;
@@ -263,11 +227,7 @@ const server = http.createServer(async (req, res) => {
       if (!existsSync(SESSIONS_DIR)) return json(res, []);
       const sessions = readdirSync(SESSIONS_DIR, { withFileTypes: true })
         .filter(d => d.isDirectory())
-        .map(d => {
-          const state = loadState(d.name);
-          const running = isContainerRunning(containerName(d.name));
-          return { sessionId: d.name, ...state, containerRunning: running };
-        });
+        .map(d => ({ sessionId: d.name, ...loadState(d.name) }));
       return json(res, sessions);
     }
 
@@ -311,8 +271,7 @@ server.listen(PORT, () => {
 
 // Cleanup on exit
 process.on('SIGTERM', () => {
-  console.log('[shutdown] Stopping all containers...');
-  for (const [id, timer] of idleTimers) { clearTimeout(timer); stopContainer(id); }
+  console.log('[shutdown] Shutting down...');
   server.close();
   process.exit(0);
 });
