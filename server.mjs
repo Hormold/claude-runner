@@ -242,6 +242,7 @@ function executeTask(sessionId, task) {
 
   const dockerArgs = [
     'run', '--rm', '--name', containerName,
+    '--add-host=host.docker.internal:host-gateway',
     '-v', `${dir}:/workspace`,
     '-v', `${join(dir, '.claude')}:/home/runner/.claude`,
     '-e', `CLAUDE_CODE_OAUTH_TOKEN=${token}`,

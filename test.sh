@@ -24,15 +24,26 @@ docker image inspect claude-runner >/dev/null 2>&1 || {
 }
 pass "Docker image: claude-runner"
 
+# Start mock API server (external, agent can't see its source)
+MOCK_PID=""
+if ! curl -sf http://host.docker.internal:3457/api/health >/dev/null 2>&1; then
+  node mock-api.mjs &
+  MOCK_PID=$!
+  sleep 1
+fi
+curl -sf http://localhost:3457/api/health >/dev/null && pass "Mock API running on :3457" || { fail "Mock API not responding"; exit 1; }
+
 # Start server if not running
 if ! curl -sf $BASE/health >/dev/null 2>&1; then
-  echo "Starting server..."
   node server.mjs &
   SERVER_PID=$!
-  trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null" EXIT
   sleep 2
 fi
+trap "kill $SERVER_PID $MOCK_PID 2>/dev/null; wait $SERVER_PID $MOCK_PID 2>/dev/null" EXIT
 curl -sf $BASE/health >/dev/null && pass "Server running on :3456" || { fail "Server not responding"; exit 1; }
+
+# Env vars passed to Docker containers (agent uses CLI that calls mock API)
+AGENT_ENV='{"ACME_API_URL":"http://host.docker.internal:3457","ACME_API_TOKEN":"acme-secret-token-42"}'
 
 # ── 1. Health ──
 echo ""
@@ -44,7 +55,7 @@ echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  
 echo ""
 echo -e "${BOLD}2. New Session → Tools → Structured Output${NC}"
 R1=$(curl -sf -X POST $BASE/task -H "Content-Type: application/json" \
-  -d '{"sessionId":"alice","message":"My email is jane@example.com. How many calls do I have left?","context":"Channel: web-chat"}')
+  -d "{\"sessionId\":\"alice\",\"message\":\"My email is alice@startup.io. How many calls do I have left?\",\"context\":\"Channel: web-chat\",\"env\":$AGENT_ENV}")
 echo "$R1" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -66,7 +77,7 @@ if o:
 echo ""
 echo -e "${BOLD}3. Independent Session (Isolation)${NC}"
 R2=$(curl -sf -X POST $BASE/task -H "Content-Type: application/json" \
-  -d '{"sessionId":"bob","message":"My email is john@example.com. What plan am I on?"}')
+  -d "{\"sessionId\":\"bob\",\"message\":\"My email is bob@bigcorp.com. What plan am I on and is my payment up to date?\",\"env\":$AGENT_ENV}")
 echo "$R2" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -83,7 +94,7 @@ if o:
 echo ""
 echo -e "${BOLD}4. Resume Session (Memory Persistence)${NC}"
 R3=$(curl -sf -X POST $BASE/task -H "Content-Type: application/json" \
-  -d '{"sessionId":"alice","message":"What was my email and how many calls left? Answer from memory."}')
+  -d "{\"sessionId\":\"alice\",\"message\":\"What was my email and how many calls did I have left? Answer from memory.\",\"env\":$AGENT_ENV}")
 echo "$R3" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -175,7 +186,7 @@ req.on('upgrade',(res,socket)=>{
   // 2. After connected, send task via HTTP
   setTimeout(()=>{
     const r2=http.request({hostname:'localhost',port:3456,path:'/task',method:'POST',headers:{'Content-Type':'application/json'}});
-    r2.write(JSON.stringify({sessionId:'ws-test',message:'Say just the word hello'}));
+    r2.write(JSON.stringify({sessionId:'ws-test',message:'Say just hello'}));
     r2.end();
   },500);
 });
