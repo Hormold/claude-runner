@@ -14,6 +14,16 @@ export const McpServerConfigSchema = z.object({
 
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
+// ── Resource Limits ──
+
+export const ResourceLimitsSchema = z.object({
+  cpus: z.number().positive().optional(),
+  memoryMb: z.number().int().positive().optional(),
+  diskMb: z.number().int().positive().optional(),
+});
+
+export type ResourceLimits = z.infer<typeof ResourceLimitsSchema>;
+
 // ── Context Config ──
 
 export const ContextConfigSchema = z.object({
@@ -28,6 +38,7 @@ export const ContextConfigSchema = z.object({
   secrets: z.record(z.string(), z.string()).optional(),
   network: z.enum(['none', 'restricted', 'full']).optional(),
   allowedEndpoints: z.array(z.string()).optional(),
+  resources: ResourceLimitsSchema.optional(),
   tools: z.object({
     allowedCommands: z.array(z.string()).optional(),
   }).optional(),

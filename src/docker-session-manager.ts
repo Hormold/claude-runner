@@ -293,6 +293,18 @@ export class DockerSessionManager extends EventEmitter {
     }
     // 'full' mode: use default bridge network (no --network flag)
 
+    // Resource limits (defaults: 2 CPUs, 2GB memory, 1GB disk)
+    const resources = config.resources ?? { cpus: 2, memoryMb: 2048, diskMb: 1024 };
+    if (resources.cpus) {
+      args.push('--cpus', String(resources.cpus));
+    }
+    if (resources.memoryMb) {
+      args.push('--memory', `${resources.memoryMb}m`);
+    }
+    if (resources.diskMb) {
+      args.push('--storage-opt', `size=${resources.diskMb}m`);
+    }
+
     // Inject secrets as container env vars (not written to disk)
     if (config.secrets) {
       for (const [key, value] of Object.entries(config.secrets)) {

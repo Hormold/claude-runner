@@ -946,6 +946,118 @@ describe('DockerSessionManager', () => {
     });
   });
 
+  // ── resource limits ──
+
+  describe('resource limits', () => {
+    it('applies default resource limits when none configured', async () => {
+      contextManager.create('test-ctx');
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      expect(runCall).toBeDefined();
+      const cmd = runCall![0] as string;
+
+      expect(cmd).toContain('--cpus 2');
+      expect(cmd).toContain('--memory 2048m');
+      expect(cmd).toContain('--storage-opt size=1024m');
+    });
+
+    it('applies custom resource limits from config', async () => {
+      contextManager.create('test-ctx', undefined, {
+        resources: { cpus: 4, memoryMb: 4096, diskMb: 2048 },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+
+      expect(cmd).toContain('--cpus 4');
+      expect(cmd).toContain('--memory 4096m');
+      expect(cmd).toContain('--storage-opt size=2048m');
+    });
+
+    it('supports fractional CPU values', async () => {
+      contextManager.create('test-ctx', undefined, {
+        resources: { cpus: 0.5 },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+
+      expect(cmd).toContain('--cpus 0.5');
+    });
+
+    it('different contexts can have different resource limits', async () => {
+      contextManager.create('ctx-small', undefined, {
+        resources: { cpus: 1, memoryMb: 512, diskMb: 256 },
+      });
+      contextManager.create('ctx-large', undefined, {
+        resources: { cpus: 8, memoryMb: 8192, diskMb: 4096 },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn
+        .mockReturnValueOnce(createMockChildProcess(workerOutput + '\n') as any)
+        .mockReturnValueOnce(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('ctx-small', 'test', 'task-1');
+      await dockerManager.executeTask('ctx-large', 'test', 'task-2');
+
+      const runCalls = mockExecSync.mock.calls.filter(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      expect(runCalls.length).toBe(2);
+
+      const cmdSmall = runCalls[0][0] as string;
+      const cmdLarge = runCalls[1][0] as string;
+
+      expect(cmdSmall).toContain('--cpus 1');
+      expect(cmdSmall).toContain('--memory 512m');
+      expect(cmdSmall).toContain('--storage-opt size=256m');
+
+      expect(cmdLarge).toContain('--cpus 8');
+      expect(cmdLarge).toContain('--memory 8192m');
+      expect(cmdLarge).toContain('--storage-opt size=4096m');
+    });
+
+    it('Docker OOM killer terminates container on memory exceed', async () => {
+      contextManager.create('test-ctx', undefined, {
+        resources: { memoryMb: 512 },
+      });
+
+      // Simulate OOM kill: worker exits with code 137 (SIGKILL from OOM)
+      mockSpawn.mockReturnValue(
+        createMockChildProcess('', 'Killed', 137) as any,
+      );
+
+      await expect(
+        dockerManager.executeTask('test-ctx', 'test', 'task-1'),
+      ).rejects.toThrow(/Worker exited with code 137/);
+
+      // Container state should be cleaned up
+      expect(dockerManager.isRunning('test-ctx')).toBe(false);
+    });
+  });
+
   // ── abortAll ──
 
   describe('abortAll', () => {

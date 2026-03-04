@@ -43,11 +43,11 @@ Restrict container network access per context policy.
 ### Task 4: Resource limits
 CPU, memory, and disk limits per context.
 
-- [ ] `config.resources: { cpus, memoryMb, diskMb }` in config.json
-- [ ] Map to Docker `--cpus`, `--memory`, `--storage-opt`
-- [ ] Default limits: 2 CPUs, 2GB memory, 1GB disk
-- [ ] Kill container if limits exceeded
-- [ ] Write tests: resource limit enforcement
+- [x] `config.resources: { cpus, memoryMb, diskMb }` in config.json
+- [x] Map to Docker `--cpus`, `--memory`, `--storage-opt`
+- [x] Default limits: 2 CPUs, 2GB memory, 1GB disk
+- [x] Kill container if limits exceeded
+- [x] Write tests: resource limit enforcement
 
 ### Task 5: Fallback mode (no Docker)
 Keep process-based execution as fallback for development/trusted environments.

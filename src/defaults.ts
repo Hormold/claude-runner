@@ -5,6 +5,11 @@ export const DEFAULT_CONFIG: ContextConfig = {
   maxTurns: 50,
   historyWindow: 20,
   idleTimeoutMs: 300_000, // 5 minutes
+  resources: {
+    cpus: 2,
+    memoryMb: 2048,
+    diskMb: 1024,
+  },
 };
 
 export const DEFAULT_AGENTS_MD = `# Agent
