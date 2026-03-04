@@ -1,4 +1,4 @@
-import { query, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-code';
+import { query, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-agent-sdk';
 import { ContextConfig } from './types.js';
 import { HistoryManager } from './history.js';
 import { ContextManager } from './context.js';
@@ -137,7 +137,7 @@ export class SessionManager extends EventEmitter {
       };
 
       if (systemPrompt) {
-        options.customSystemPrompt = systemPrompt;
+        options.systemPrompt = systemPrompt;
       }
 
       if (Object.keys(mcpServers).length > 0) {
