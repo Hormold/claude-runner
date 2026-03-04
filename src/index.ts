@@ -369,11 +369,12 @@ if (isMainModule()) {
 
   const PORT = parseInt(process.env.PORT || '3456');
 
-  const server = app.listen(PORT, () => {
+  const HOST = process.env.HOST || '127.0.0.1';
+  const server = app.listen(PORT, HOST, () => {
     console.log(`
 ╔══════════════════════════════════════╗
 ║  Claude Runner v0.1.0                ║
-║  http://localhost:${PORT}               ║
+║  http://${HOST}:${PORT}${' '.repeat(Math.max(0, 20 - HOST.length - String(PORT).length))}║
 ║                                      ║
 ║  POST /api/context         Create    ║
 ║  POST /api/task            Submit    ║
@@ -402,12 +403,12 @@ if (isMainModule()) {
     // Mark running tasks as failed so they don't block contexts on restart
     queue.expireStuckTasks(0);
 
-    // Abort running tasks, kill sessions, close queue
+    // Abort running tasks and kill sessions
     sessionManager.abortAll();
-    queue.close();
 
-    // Give in-flight requests a moment to finish
+    // Give in-flight error handlers a moment to finish DB writes, then close
     setTimeout(() => {
+      queue.close();
       console.log('[shutdown] Done');
       process.exit(0);
     }, 2000);

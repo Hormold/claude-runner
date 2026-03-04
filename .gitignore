@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .data/
+.env
+.env.*
 contexts/*/
 !contexts/_template/
 *.db

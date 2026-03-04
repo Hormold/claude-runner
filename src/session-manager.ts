@@ -80,14 +80,18 @@ export class SessionManager extends EventEmitter {
     this.running.add(contextId);
     this.emit('task:start', { contextId, taskId });
 
+    const config = this.contextManager.getConfig(contextId);
+    const workDir = this.contextManager.contextPath(contextId);
+
     try {
-      const config = this.contextManager.getConfig(contextId);
-      const workDir = this.contextManager.contextPath(contextId);
       const history = new HistoryManager(workDir);
 
-      // Reset idle timer
+      // Create session entry (for sessionId resume lookup) but clear idle timer
+      // during execution — it will be restarted after the task completes
       this.touchSession(contextId, workDir, config);
       this.emit('session:created', { contextId });
+      const activeSession = this.sessions.get(contextId);
+      if (activeSession) clearTimeout(activeSession.idleTimer);
 
       // Save user prompt to history
       history.append({
@@ -155,6 +159,9 @@ export class SessionManager extends EventEmitter {
         taskId,
       );
 
+      // Restart idle timer now that execution is done
+      this.touchSession(contextId, workDir, config);
+
       // Save assistant response to history
       history.append({
         role: 'assistant',
@@ -172,6 +179,10 @@ export class SessionManager extends EventEmitter {
     } finally {
       this.running.delete(contextId);
       this.abortControllers.delete(contextId);
+      // Restart idle timer (covers error path where touchSession after execution was skipped)
+      if (this.sessions.has(contextId)) {
+        this.touchSession(contextId, workDir, config);
+      }
     }
   }
 
@@ -317,6 +328,7 @@ export class SessionManager extends EventEmitter {
       clearTimeout(session.idleTimer);
       this.sessions.delete(contextId);
     }
+    this.running.delete(contextId);
     // Abort any running task for this context
     const controller = this.abortControllers.get(contextId);
     if (controller) {
