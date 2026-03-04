@@ -94,10 +94,10 @@ Create a useful default template and an example context showing MCP + tools inte
 ### Task 9: Integration tests — end-to-end flow
 Write integration tests that verify the full flow: create context → submit task → poll → get result.
 
-- [ ] Test: create context, submit task, poll until complete, verify result
-- [ ] Test: submit multiple tasks to same context — sequential execution
-- [ ] Test: submit tasks to different contexts — parallel execution  
-- [ ] Test: webhook callback fires on completion
-- [ ] Test: task failure handling and error reporting
-- [ ] Test: context deletion cleans up sessions and files
-- [ ] Test: server graceful shutdown with pending tasks
+- [x] Test: create context, submit task, poll until complete, verify result
+- [x] Test: submit multiple tasks to same context — sequential execution
+- [x] Test: submit tasks to different contexts — parallel execution
+- [x] Test: webhook callback fires on completion
+- [x] Test: task failure handling and error reporting
+- [x] Test: context deletion cleans up sessions and files
+- [x] Test: server graceful shutdown with pending tasks
