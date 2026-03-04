@@ -1,8 +1,0 @@
-{
-  "model": "claude-sonnet-4-20250514",
-  "maxTurns": 50,
-  "historyWindow": 20,
-  "idleTimeoutMs": 300000,
-  "maxConcurrentSessions": 5,
-  "executionTimeoutMs": 600000
-}

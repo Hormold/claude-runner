@@ -1,34 +1,14 @@
 {
   "name": "claude-runner",
-  "version": "0.1.0",
-  "description": "Orchestrator for running Claude Code as a service with persistent file-based context",
+  "version": "1.0.0",
+  "description": "Run AI agents in isolated Docker containers. Fork → customize → deploy.",
   "type": "module",
-  "bin": {
-    "claude-runner": "./dist/cli.js"
-  },
+  "main": "server.mjs",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "test": "vitest run --reporter=verbose"
+    "start": "node server.mjs",
+    "build": "docker build -t claude-runner .",
+    "test": "bash test.sh"
   },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.68",
-    "@anthropic-ai/claude-code": "^2.1.68",
-    "better-sqlite3": "^11.0.0",
-    "express": "^5.0.1",
-    "uuid": "^11.1.0",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.0.0",
-    "@types/supertest": "^7.2.0",
-    "@types/uuid": "^10.0.0",
-    "supertest": "^7.2.2",
-    "tsx": "^4.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.0.18"
-  }
+  "keywords": ["claude", "agent", "docker", "ai", "sdk"],
+  "license": "MIT"
 }

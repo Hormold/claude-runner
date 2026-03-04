@@ -1,396 +1,195 @@
 # Claude Runner
 
-Run Claude Code as a service. Persistent file-based contexts, SQLite task queue, REST API.
+Run AI agents in isolated Docker containers. Fork → customize → deploy.
 
-Each context gets its own isolated workspace with a custom persona (AGENTS.md), persistent memory (MEMORY.md), tools, MCP server integrations, and conversation history. Tasks are queued per-context (FIFO), executed sequentially within a context, and parallelized across contexts.
+```
+Your app  →  POST /task  →  Claude Runner  →  Docker container  →  Structured JSON
+```
+
+## What It Does
+
+You give it a task. It spins up an isolated Docker container, runs a Claude agent with your custom prompts and tools, and returns structured JSON with the result and cost.
+
+- **One container per session** — full isolation between users
+- **Session persistence** — agent remembers previous interactions
+- **Task queue** — one task at a time per session, rest queued
+- **Abort** — kill any running task instantly
+- **Structured output** — define your JSON schema in `OUTPUT.md`
+- **Custom tools** — drop shell scripts in `agent/tools/`
+- **Env passthrough** — pass secrets per session (API keys, tokens)
+- **Cost tracking** — every response includes `cost` in USD
 
 ## Quick Start
 
-Requires Node.js >= 18.0.0.
-
 ```bash
-npm install
-npm run dev
-```
-
-Server starts at `http://localhost:3456`. Task queue data is stored in `.data/queue.db` (SQLite).
-
-## CLI
-
-A built-in CLI client is available for quick interaction:
-
-```bash
-# Create a context
-npx tsx src/cli.ts create my-project
-
-# Create with custom persona and config
-npx tsx src/cli.ts create my-project --agents-md ./my-agents.md --config ./my-config.json
-
-# Submit a task
-npx tsx src/cli.ts task my-project "Create a hello world app in data/app.py"
-
-# Submit and wait for result
-npx tsx src/cli.ts task my-project "Analyze the CSV in data/" --wait
-
-# Check task status
-npx tsx src/cli.ts status <task-id>
-
-# List all contexts
-npx tsx src/cli.ts contexts
-
-# Delete a context
-npx tsx src/cli.ts delete my-project
-```
-
-Environment variables:
-- `CLAUDE_RUNNER_URL` — Server URL (default: `http://localhost:3456`)
-- `CLAUDE_RUNNER_POLL_MS` — Poll interval for `--wait` (default: `2000`)
-
-## Context Workspaces
-
-Each context is an isolated directory under `contexts/`:
-
-```
-contexts/my-project/
-├── AGENTS.md      # Agent persona and instructions
-├── MEMORY.md      # Persistent memory (read/written by agent)
-├── config.json    # Model, MCP servers, env vars, tools config
-├── tools/         # CLI scripts available to the agent
-├── history/       # Conversation history (JSONL)
-└── data/          # Working files (reports, outputs, etc.)
-```
-
-### Template
-
-New contexts are cloned from `contexts/_template/` if it exists. The template ships with sensible defaults. Customize it to set your organization's baseline.
-
-### AGENTS.md
-
-The agent persona file. Controls how the agent behaves, what tools it uses, and how it handles tasks. See `contexts/_template/AGENTS.md` for the default.
-
-### config.json
-
-Context configuration. All fields are optional — defaults are applied automatically.
-
-```json
-{
-  "model": "claude-sonnet-4-20250514",
-  "maxTurns": 50,
-  "historyWindow": 20,
-  "idleTimeoutMs": 300000,
-  "maxConcurrentSessions": 5,
-  "executionTimeoutMs": 600000,
-  "mcpServers": {
-    "slack": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/slack-mcp"],
-      "env": { "SLACK_TOKEN": "xoxb-..." }
-    }
-  },
-  "env": {
-    "API_KEY": "secret123"
-  },
-  "tools": {
-    "allowedCommands": ["node", "python3", "curl", "jq"]
-  }
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `model` | string | `claude-sonnet-4-20250514` | Claude model to use |
-| `maxTurns` | number | `50` | Max agentic turns per task |
-| `historyWindow` | number | `20` | Number of history turns to include in prompt |
-| `idleTimeoutMs` | number | `300000` | Kill session after idle period (ms) |
-| `maxConcurrentSessions` | number | `5` | Max parallel sessions across all contexts |
-| `executionTimeoutMs` | number | `600000` | Per-task execution timeout (ms) |
-| `mcpServers` | object | `{}` | MCP server configurations |
-| `env` | object | `{}` | Environment variables injected into session |
-| `tools.allowedCommands` | string[] | `[]` | Allowed CLI commands |
-
-### MEMORY.md
-
-Persistent memory file. The agent reads it at the start of each task and can update it with findings, decisions, and state that should persist across tasks.
-
-## API Reference
-
-Base URL: `http://localhost:3456`
-
-### Health
-
-```
-GET /api/health
-```
-
-Returns server status, context count, active sessions, and queue statistics.
-
-```json
-{
-  "status": "ok",
-  "contexts": 3,
-  "activeSessions": ["my-project"],
-  "queueStats": {
-    "counts": { "queued": 2, "running": 1, "completed": 15, "failed": 0 },
-    "oldestQueuedAge": 45000
-  }
-}
-```
-
-### Contexts
-
-#### Create context
-
-```
-POST /api/context
-Content-Type: application/json
-
-{
-  "contextId": "my-project",
-  "agentsMd": "# Agent\nYou are a Python expert.",
-  "config": {
-    "model": "claude-sonnet-4-20250514",
-    "idleTimeoutMs": 300000
-  }
-}
-```
-
-- `contextId` (required): Alphanumeric, hyphens, underscores, 1-64 chars
-- `agentsMd` (optional): Custom AGENTS.md content. If omitted, uses template or default
-- `config` (optional): Partial config to merge with defaults
-
-Response: `201 Created`
-```json
-{ "contextId": "my-project", "path": "/path/to/contexts/my-project" }
-```
-
-#### List contexts
-
-```
-GET /api/context
-```
-
-Response: `200 OK` — Array of context info objects.
-
-#### Get context info
-
-```
-GET /api/context/:id
-```
-
-Response: `200 OK`
-```json
-{
-  "contextId": "my-project",
-  "createdAt": 1704067200000,
-  "lastActive": 1704070800000,
-  "config": { "model": "claude-sonnet-4-20250514", "maxTurns": 50 },
-  "sessionAlive": true
-}
-```
-
-#### Update context config
-
-```
-POST /api/context/:id/config
-Content-Type: application/json
-
-{ "maxTurns": 100, "idleTimeoutMs": 600000 }
-```
-
-Merges partial config into existing config. Validates the result.
-
-Response: `200 OK`
-```json
-{ "contextId": "my-project", "config": { "...merged config..." } }
-```
-
-#### List context files
-
-```
-GET /api/context/:id/files
-```
-
-Response: `200 OK`
-```json
-{ "contextId": "my-project", "files": ["AGENTS.md", "MEMORY.md", "config.json", "data/report.csv"] }
-```
-
-#### List context tasks
-
-```
-GET /api/context/:id/tasks?limit=20
-```
-
-Response: `200 OK` — Array of task objects for this context.
-
-#### Delete context
-
-```
-DELETE /api/context/:id
-```
-
-Kills any active session and removes the workspace directory.
-
-Response: `200 OK`
-```json
-{ "deleted": "my-project" }
-```
-
-### Tasks
-
-#### Submit task
-
-```
-POST /api/task
-Content-Type: application/json
-
-{
-  "contextId": "my-project",
-  "prompt": "Create a hello world FastAPI app in data/app.py",
-  "webhook": "https://example.com/callback",
-  "priority": 0
-}
-```
-
-- `contextId` (required): Target context
-- `prompt` (required): Task instruction
-- `webhook` (optional): URL to POST result on completion/failure
-- `priority` (optional): Higher number = higher priority (default: 0)
-
-Response: `201 Created`
-```json
-{ "taskId": "abc-123", "status": "queued", "contextId": "my-project" }
-```
-
-#### Get task status
-
-```
-GET /api/task/:id
-```
-
-Response: `200 OK`
-```json
-{
-  "id": "abc-123",
-  "contextId": "my-project",
-  "prompt": "Create a hello world FastAPI app",
-  "status": "completed",
-  "result": "Created data/app.py with a FastAPI hello world app.",
-  "createdAt": 1704067200000,
-  "startedAt": 1704067201000,
-  "completedAt": 1704067210000
-}
-```
-
-Task statuses: `queued`, `running`, `completed`, `failed`
-
-### Webhook Callbacks
-
-When a task completes or fails, if a `webhook` URL was provided, the server POSTs:
-
-```json
-{
-  "taskId": "abc-123",
-  "contextId": "my-project",
-  "status": "completed",
-  "result": "Task output here"
-}
-```
-
-On failure:
-```json
-{
-  "taskId": "abc-123",
-  "contextId": "my-project",
-  "status": "failed",
-  "error": "Error message"
-}
-```
-
-## Examples
-
-### Customer Support Bot
-
-See `examples/customer-support/` for a complete example showing:
-- Custom AGENTS.md with support-specific persona and escalation rules
-- MCP server config for CRM integration (mock)
-- CLI tools for customer lookup and order status
-- Sample FAQ and policy data files
-
-To try it:
-
-```bash
-# Start the server
-npm run dev
-
-# Create the context from the example
-curl -X POST http://localhost:3456/api/context \
+# 1. Clone and build
+git clone https://github.com/Hormold/claude-runner
+cd claude-runner
+docker build -t claude-runner .
+
+# 2. Set your token
+export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat..."
+# or: export ANTHROPIC_API_KEY="sk-ant-api..."
+
+# 3. Start
+node server.mjs
+
+# 4. Send a task
+curl -X POST http://localhost:3456/task \
   -H "Content-Type: application/json" \
-  -d "{
-    \"contextId\": \"support\",
-    \"agentsMd\": $(cat examples/customer-support/AGENTS.md | jq -Rs .),
-    \"config\": $(cat examples/customer-support/config.json)
-  }"
-
-# Submit a support task
-npx tsx src/cli.ts task support "Customer jane@example.com says her order ORD-789 hasn't arrived" --wait
+  -d '{"sessionId": "user-1", "message": "Hello, what can you do?"}'
 ```
 
-## Architecture
+## API
 
+### `POST /task` — Submit Task
+
+```json
+{
+  "sessionId": "user-123",
+  "message": "Look up my account, email is jane@example.com",
+  "context": "Channel: web-chat",
+  "env": { "MY_API_TOKEN": "secret-123" }
+}
 ```
-POST /api/task → Queue (SQLite) → Session Manager → Claude Code SDK
-                                        ↓
-                              contexts/{id}/
-                              ├── AGENTS.md     (persona)
-                              ├── MEMORY.md     (persistent memory)
-                              ├── config.json   (MCP, env, model)
-                              ├── tools/        (CLI scripts)
-                              ├── history/      (conversation)
-                              └── data/         (working files)
+
+Response:
+```json
+{
+  "taskId": "a1b2c3d4",
+  "sessionId": "user-123",
+  "output": {
+    "action": "reply",
+    "response": "You have 1 API call remaining on your free plan.",
+    "user": { "name": "Jane Doe", "email": "jane@example.com", "plan": "free" },
+    "confidence": 1.0
+  },
+  "cost": 0.021,
+  "duration": 11608,
+  "tools": ["Bash"],
+  "resumed": false
+}
 ```
 
-Key design decisions:
-- Per-context isolation: each context has its own workspace, history, and config
-- SQLite task queue: durable, zero external dependencies, survives restarts
-- One task per context at a time: prevents race conditions on workspace files
-- Parallel across contexts: different contexts execute simultaneously
-- Session reuse: idle sessions are kept warm and resumed via SDK
-- File-based context: inspectable, editable, versionable with git
+### `POST /task/:sessionId/abort` — Abort Task
+Kills the container and rejects queued tasks.
 
-**Security note:** Claude Code sessions run with `permissionMode: 'bypassPermissions'`, meaning agents can execute shell commands and write files without interactive prompts. This is by design for headless/server operation. Deploy behind authentication and only accept trusted prompts, or sandbox at the container level.
+### `GET /sessions` — List Sessions
+### `GET /session/:id` — Session Details
+### `DELETE /session/:id` — Delete Session
+### `POST /session/:id/reset` — Reset to Clean State
 
-## Connectors
+### `GET /health`
 
-The REST API is the universal input. Build connectors on top:
+## Customization
 
-- Slack: Webhook -> POST /api/task
-- Web UI: Chat interface -> POST /api/task + poll GET /api/task/:id
-- Cron: Scheduled tasks -> POST /api/task
-- GitHub: Issue/PR events -> POST /api/task with webhook callback
+### 1. Agent Prompt (`agent/AGENTS.md`)
 
-## Configuration
+Defines who the agent is and what it can do:
 
-### Environment Variables
+```markdown
+# My Agent
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3456` | Server port |
-| `CORS_ORIGINS` | `*` | Allowed CORS origins |
+You are a website builder assistant.
 
-### Server Startup
+## Tools
+- `tools/update-page.sh <page> <content>` — update a page
+- `tools/deploy.sh` — deploy the site
+
+## Rules
+- Always confirm changes before deploying
+```
+
+### 2. Output Format (`agent/OUTPUT.md`)
+
+Defines the structured JSON the agent must return:
+
+```markdown
+# Output Format
+
+Return a JSON object:
+{
+  "action": "update | deploy | error",
+  "changes": ["list of changes made"],
+  "summary": "What you did"
+}
+```
+
+### 3. Tools (`agent/tools/`)
+
+Shell scripts the agent can execute. They receive arguments and should output JSON:
 
 ```bash
-# Development (auto-reload)
-npm run dev
-
-# Production
-npm run build
-npm start
-
-# Custom port
-PORT=8080 npm run dev
+#!/bin/bash
+# tools/update-page.sh <page> <content>
+echo "{\"updated\": \"$1\", \"status\": \"ok\"}"
 ```
+
+### 4. Environment Variables
+
+Pass secrets when creating tasks — they're available inside the container:
+
+```json
+{
+  "sessionId": "user-1",
+  "message": "Deploy my site",
+  "env": { "DEPLOY_TOKEN": "abc123", "SITE_ID": "my-site" }
+}
+```
+
+Your tools access them normally: `$DEPLOY_TOKEN`, `$SITE_ID`.
+
+## How It Works
+
+```
+POST /task {sessionId: "alice", message: "..."}
+    │
+    ▼
+┌─────────────────────────┐
+│  Task Queue (per session)│  ← one at a time, rest wait
+└─────────────┬───────────┘
+              │
+              ▼
+┌─────────────────────────┐
+│  Docker Container       │
+│                         │
+│  /workspace/            │
+│    AGENTS.md            │  ← your prompt
+│    OUTPUT.md            │  ← output schema
+│    tools/               │  ← your scripts
+│    data/                │  ← agent workspace
+│                         │
+│  Claude Agent SDK       │
+│    → reads prompts      │
+│    → runs tools         │
+│    → returns JSON       │
+└─────────────┬───────────┘
+              │
+              ▼
+┌─────────────────────────┐
+│  Response               │
+│  {output, cost, tools}  │
+└─────────────────────────┘
+```
+
+**Session persistence**: Each session gets its own directory under `sessions/`. The SDK session history is stored in `.claude/` — when you send another task to the same session, the agent picks up where it left off.
+
+**Isolation**: Sessions are fully independent. Different users get different containers, different workspaces, different histories.
+
+## Run Tests
+
+```bash
+./test.sh
+```
+
+Runs a full cycle: create session → tools → structured output → independent session → resume → reset → delete.
+
+## Use Cases
+
+- **Customer support bot** — tools call your CRM, returns structured responses
+- **Website builder** — user says what to change, agent modifies files, returns diff
+- **Code review** — agent reads PRs, runs linters, returns structured feedback
+- **Data pipeline** — agent processes files, calls APIs, returns results
 
 ## License
 
