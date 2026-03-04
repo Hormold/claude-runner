@@ -271,15 +271,27 @@ export class DockerSessionManager extends EventEmitter {
     absWorkDir: string,
     config: ContextConfig,
   ): string {
+    const networkMode = config.network ?? 'none';
+
     const args = [
       'run', '-d',
       '--name', containerName,
       '--read-only',
       '--tmpfs', '/tmp:size=256m',
       '--security-opt', 'no-new-privileges:true',
-      '--network', 'none',
       '-v', `${absWorkDir}:/workspace`,
     ];
+
+    // Network isolation mode
+    if (networkMode === 'none') {
+      args.push('--network', 'none');
+    } else if (networkMode === 'restricted') {
+      const networkName = this.networkNameFor(containerName);
+      this.ensureNetwork(networkName);
+      args.push('--network', networkName);
+      args.push('--cap-add', 'NET_ADMIN');
+    }
+    // 'full' mode: use default bridge network (no --network flag)
 
     // Inject secrets as container env vars (not written to disk)
     if (config.secrets) {
@@ -294,6 +306,11 @@ export class DockerSessionManager extends EventEmitter {
       encoding: 'utf-8',
       timeout: 30_000,
     });
+
+    // For restricted mode, apply iptables rules after container starts
+    if (networkMode === 'restricted') {
+      this.applyNetworkRestrictions(containerName, config);
+    }
 
     return output.trim();
   }
@@ -319,6 +336,98 @@ export class DockerSessionManager extends EventEmitter {
     } catch {
       // Container may not exist, that's fine
     }
+
+    // Clean up any associated restricted-mode network
+    this.removeNetwork(this.networkNameFor(containerName));
+  }
+
+  // ── Network isolation ──
+
+  private networkNameFor(containerName: string): string {
+    const contextId = containerName.startsWith(CONTAINER_PREFIX)
+      ? containerName.slice(CONTAINER_PREFIX.length)
+      : containerName;
+    return `claude-net-${contextId}`;
+  }
+
+  private ensureNetwork(networkName: string): void {
+    try {
+      execSync(`docker network create ${networkName}`, {
+        stdio: 'ignore',
+        timeout: 10_000,
+      });
+    } catch {
+      // Network may already exist
+    }
+  }
+
+  private removeNetwork(networkName: string): void {
+    try {
+      execSync(`docker network rm ${networkName}`, {
+        stdio: 'ignore',
+        timeout: 10_000,
+      });
+    } catch {
+      // Network may not exist
+    }
+  }
+
+  private applyNetworkRestrictions(containerName: string, config: ContextConfig): void {
+    const endpoints = this.collectAllowedEndpoints(config);
+
+    const rules: string[] = [
+      'iptables -P OUTPUT DROP',
+      'iptables -A OUTPUT -o lo -j ACCEPT',
+      'iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT',
+      'iptables -A OUTPUT -p udp --dport 53 -j ACCEPT',
+      'iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT',
+    ];
+
+    for (const endpoint of endpoints) {
+      const colonIdx = endpoint.lastIndexOf(':');
+      if (colonIdx > 0) {
+        const host = endpoint.substring(0, colonIdx);
+        const port = endpoint.substring(colonIdx + 1);
+        rules.push(`iptables -A OUTPUT -d ${host} -p tcp --dport ${port} -j ACCEPT`);
+      } else {
+        rules.push(`iptables -A OUTPUT -d ${endpoint} -j ACCEPT`);
+      }
+    }
+
+    const script = rules.join(' && ');
+    try {
+      execSync(`docker exec ${containerName} sh -c '${script}'`, {
+        timeout: 10_000,
+        stdio: 'ignore',
+      });
+    } catch {
+      // iptables may not be available in container image
+    }
+  }
+
+  private collectAllowedEndpoints(config: ContextConfig): string[] {
+    const endpoints: string[] = [];
+
+    if (config.allowedEndpoints) {
+      endpoints.push(...config.allowedEndpoints);
+    }
+
+    // Auto-extract hosts from MCP server SSE/HTTP URLs
+    if (config.mcpServers) {
+      for (const srv of Object.values(config.mcpServers)) {
+        if (srv.url) {
+          try {
+            const parsed = new URL(srv.url);
+            const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+            endpoints.push(`${parsed.hostname}:${port}`);
+          } catch {
+            // Invalid URL, skip
+          }
+        }
+      }
+    }
+
+    return endpoints;
   }
 
   /**

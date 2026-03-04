@@ -753,6 +753,199 @@ describe('DockerSessionManager', () => {
     });
   });
 
+  // ── network isolation ──
+
+  describe('network isolation modes', () => {
+    it('defaults to network none when no network config', async () => {
+      contextManager.create('test-ctx');
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+      expect(cmd).toContain('--network none');
+    });
+
+    it('uses default bridge network for full mode', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'full' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+      // Full mode should NOT have --network none
+      expect(cmd).not.toContain('--network');
+    });
+
+    it('creates custom network for restricted mode', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'restricted' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      // Should have created a Docker network
+      const networkCreateCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker network create'),
+      );
+      expect(networkCreateCall).toBeDefined();
+      expect(String(networkCreateCall![0])).toContain('claude-net-test-ctx');
+
+      // Container should be on the custom network
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+      expect(cmd).toContain('--network claude-net-test-ctx');
+    });
+
+    it('adds NET_ADMIN capability for restricted mode', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'restricted' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const runCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker run'),
+      );
+      const cmd = runCall![0] as string;
+      expect(cmd).toContain('--cap-add NET_ADMIN');
+    });
+
+    it('applies iptables restrictions for restricted mode', async () => {
+      contextManager.create('test-ctx', undefined, {
+        network: 'restricted',
+        allowedEndpoints: ['api.example.com:443'],
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      // Should have called docker exec with iptables rules
+      const execCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker exec') && String(call[0]).includes('iptables'),
+      );
+      expect(execCall).toBeDefined();
+      const execCmd = String(execCall![0]);
+      expect(execCmd).toContain('iptables -P OUTPUT DROP');
+      expect(execCmd).toContain('-d api.example.com -p tcp --dport 443');
+    });
+
+    it('allows DNS in restricted mode iptables rules', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'restricted' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const execCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker exec') && String(call[0]).includes('iptables'),
+      );
+      expect(execCall).toBeDefined();
+      const execCmd = String(execCall![0]);
+      expect(execCmd).toContain('--dport 53');
+    });
+
+    it('auto-extracts MCP server URLs as allowed endpoints for restricted mode', async () => {
+      contextManager.create('test-ctx', undefined, {
+        network: 'restricted',
+        mcpServers: {
+          myServer: { url: 'https://mcp.example.com:8443/sse' },
+        },
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const execCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker exec') && String(call[0]).includes('iptables'),
+      );
+      expect(execCall).toBeDefined();
+      const execCmd = String(execCall![0]);
+      expect(execCmd).toContain('-d mcp.example.com -p tcp --dport 8443');
+    });
+
+    it('cleans up custom network on container stop', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'restricted' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      // Clear mock calls to track only the cleanup calls
+      mockExecSync.mockClear();
+      mockExecSync.mockReturnValue('');
+
+      dockerManager.killSession('test-ctx');
+
+      // Should have called docker network rm
+      const networkRmCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker network rm'),
+      );
+      expect(networkRmCall).toBeDefined();
+      expect(String(networkRmCall![0])).toContain('claude-net-test-ctx');
+    });
+
+    it('host-only endpoints use unrestricted iptables allow', async () => {
+      contextManager.create('test-ctx', undefined, {
+        network: 'restricted',
+        allowedEndpoints: ['10.0.0.5'],
+      });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const execCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker exec') && String(call[0]).includes('iptables'),
+      );
+      expect(execCall).toBeDefined();
+      const execCmd = String(execCall![0]);
+      expect(execCmd).toContain('-d 10.0.0.5 -j ACCEPT');
+      // Should NOT have --dport for host-only endpoints
+      expect(execCmd).not.toContain('-d 10.0.0.5 -p tcp');
+    });
+
+    it('none mode does not create network or apply iptables', async () => {
+      contextManager.create('test-ctx', undefined, { network: 'none' });
+
+      const workerOutput = JSON.stringify({ result: 'ok' });
+      mockSpawn.mockReturnValue(createMockChildProcess(workerOutput + '\n') as any);
+
+      await dockerManager.executeTask('test-ctx', 'test', 'task-1');
+
+      const networkCreateCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('docker network create'),
+      );
+      expect(networkCreateCall).toBeUndefined();
+
+      const iptablesCall = mockExecSync.mock.calls.find(
+        call => typeof call[0] === 'string' && String(call[0]).includes('iptables'),
+      );
+      expect(iptablesCall).toBeUndefined();
+    });
+  });
+
   // ── abortAll ──
 
   describe('abortAll', () => {

@@ -33,12 +33,12 @@ Secrets from config.json injected as container env vars, not written to disk.
 ### Task 3: Network isolation
 Restrict container network access per context policy.
 
-- [ ] Default: no network access (air-gapped)
-- [ ] `config.network: "none" | "restricted" | "full"` option
-- [ ] "restricted": allow only MCP server endpoints (whitelist)
-- [ ] "full": standard network access
-- [ ] Use Docker network policies for enforcement
-- [ ] Write tests: network isolation modes
+- [x] Default: no network access (air-gapped)
+- [x] `config.network: "none" | "restricted" | "full"` option
+- [x] "restricted": allow only MCP server endpoints (whitelist)
+- [x] "full": standard network access
+- [x] Use Docker network policies for enforcement
+- [x] Write tests: network isolation modes
 
 ### Task 4: Resource limits
 CPU, memory, and disk limits per context.

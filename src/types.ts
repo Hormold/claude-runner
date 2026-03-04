@@ -26,6 +26,8 @@ export const ContextConfigSchema = z.object({
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
   secrets: z.record(z.string(), z.string()).optional(),
+  network: z.enum(['none', 'restricted', 'full']).optional(),
+  allowedEndpoints: z.array(z.string()).optional(),
   tools: z.object({
     allowedCommands: z.array(z.string()).optional(),
   }).optional(),
