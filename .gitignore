@@ -11,3 +11,12 @@ contexts/*/
 
 # ralphex progress logs
 .ralphex/progress/
+
+# SDK session data
+.claude-sdk/
+.claude/
+sessions/
+*.jsonl
+
+# Ralphex logs
+.ralphex/
