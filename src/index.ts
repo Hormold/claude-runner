@@ -1,6 +1,7 @@
-import express from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { z } from 'zod';
 import { TaskQueue } from './queue.js';
 import { ContextManager } from './context.js';
 import { SessionManager } from './session-manager.js';
@@ -10,207 +11,357 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const CONTEXTS_DIR = path.join(ROOT_DIR, 'contexts');
 const DATA_DIR = path.join(ROOT_DIR, '.data');
 
-// Initialize components
-const queue = new TaskQueue(DATA_DIR);
-const contextManager = new ContextManager(CONTEXTS_DIR);
-const sessionManager = new SessionManager(contextManager);
+// ── Zod request schemas ──
 
-// Task processing loop
-let processing = false;
+const CreateTaskSchema = z.object({
+  contextId: z.string().min(1, 'contextId is required'),
+  prompt: z.string().min(1, 'prompt is required'),
+  webhook: z.string().url().optional(),
+  priority: z.number().int().nonnegative().optional(),
+});
 
-async function processQueue() {
-  if (processing) return;
-  processing = true;
+const CreateContextSchema = z.object({
+  contextId: z.string().min(1, 'contextId is required'),
+  agentsMd: z.string().optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+});
 
-  try {
-    while (true) {
-      const runningContexts = sessionManager.getRunningContexts();
-      const task = queue.nextAvailable(runningContexts);
-      if (!task) break;
+const UpdateConfigSchema = z.record(z.string(), z.unknown());
 
-      queue.markRunning(task.id);
-      console.log(`[queue] Running task ${task.id} for context '${task.contextId}'`);
-
-      // Don't await — run in background so we can process other contexts
-      executeTask(task.id, task.contextId, task.prompt, task.webhook).catch(err => {
-        console.error(`[queue] Task ${task.id} failed:`, err);
-      });
-    }
-  } finally {
-    processing = false;
-  }
+function paramStr(val: string | string[] | undefined): string {
+  return Array.isArray(val) ? val[0] : val ?? '';
 }
 
-async function executeTask(taskId: string, contextId: string, prompt: string, webhook?: string) {
-  try {
-    const result = await sessionManager.executeTask(contextId, prompt, taskId);
-    queue.markCompleted(taskId, result);
-    console.log(`[queue] Task ${taskId} completed`);
+// ── App factory ──
 
-    // Webhook callback
-    if (webhook) {
-      try {
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId, contextId, status: 'completed', result }),
+export interface AppDeps {
+  queue: TaskQueue;
+  contextManager: ContextManager;
+  sessionManager: SessionManager;
+  corsOrigins?: string | string[];
+}
+
+export function createApp(deps: AppDeps) {
+  const { queue, contextManager, sessionManager, corsOrigins } = deps;
+
+  const app = express();
+  app.use(express.json());
+
+  // ── CORS middleware ──
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    const origin = corsOrigins
+      ? Array.isArray(corsOrigins)
+        ? corsOrigins.join(', ')
+        : corsOrigins
+      : '*';
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (_req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
+  // ── Request logging middleware ──
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[http] ${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
+    });
+    next();
+  });
+
+  // ── Task processing ──
+  let processing = false;
+
+  async function processQueue() {
+    if (processing) return;
+    processing = true;
+
+    try {
+      while (true) {
+        const runningContexts = sessionManager.getRunningContexts();
+        const task = queue.nextAvailable(runningContexts);
+        if (!task) break;
+
+        queue.markRunning(task.id);
+        console.log(`[queue] Running task ${task.id} for context '${task.contextId}'`);
+
+        executeTask(task.id, task.contextId, task.prompt, task.webhook).catch(err => {
+          console.error(`[queue] Task ${task.id} failed:`, err);
         });
-      } catch (e) {
-        console.error(`[webhook] Failed to call ${webhook}:`, e);
+      }
+    } finally {
+      processing = false;
+    }
+  }
+
+  async function executeTask(taskId: string, contextId: string, prompt: string, webhook?: string) {
+    try {
+      const result = await sessionManager.executeTask(contextId, prompt, taskId);
+      queue.markCompleted(taskId, result);
+      console.log(`[queue] Task ${taskId} completed`);
+
+      if (webhook) {
+        try {
+          await fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId, contextId, status: 'completed', result }),
+          });
+        } catch (e) {
+          console.error(`[webhook] Failed to call ${webhook}:`, e);
+        }
+      }
+    } catch (err: any) {
+      queue.markFailed(taskId, err.message || String(err));
+      console.error(`[queue] Task ${taskId} failed:`, err.message);
+
+      if (webhook) {
+        try {
+          await fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId, contextId, status: 'failed', error: err.message }),
+          });
+        } catch {} // swallow webhook errors
       }
     }
-  } catch (err: any) {
-    queue.markFailed(taskId, err.message || String(err));
-    console.error(`[queue] Task ${taskId} failed:`, err.message);
 
-    if (webhook) {
-      try {
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId, contextId, status: 'failed', error: err.message }),
-        });
-      } catch {} // swallow webhook errors
-    }
+    processQueue();
   }
 
-  // Process next tasks
-  processQueue();
+  // Session events
+  sessionManager.on('session:expired', (contextId: string) => {
+    console.log(`[session] Context '${contextId}' idle timeout — session expired`);
+  });
+
+  // ── API Routes ──
+
+  // -- Tasks --
+
+  app.post('/api/task', (req: Request, res: Response) => {
+    const parsed = CreateTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+
+    const { contextId, prompt, webhook, priority } = parsed.data;
+
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: `Context '${contextId}' not found. Create it first.` });
+      return;
+    }
+
+    const task = queue.enqueue(contextId, prompt, webhook, priority);
+    console.log(`[api] Task ${task.id} queued for context '${contextId}'`);
+
+    processQueue();
+
+    res.status(201).json({
+      taskId: task.id,
+      status: task.status,
+      contextId,
+    });
+  });
+
+  app.get('/api/task/:id', (req: Request, res: Response) => {
+    const task = queue.getTask(paramStr(req.params.id));
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    res.json(task);
+  });
+
+  // -- Contexts --
+
+  app.post('/api/context', (req: Request, res: Response) => {
+    const parsed = CreateContextSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+
+    const { contextId, agentsMd, config } = parsed.data;
+
+    try {
+      const dir = contextManager.create(contextId, agentsMd, config);
+      console.log(`[api] Context '${contextId}' created at ${dir}`);
+      res.status(201).json({ contextId, path: dir });
+    } catch (err: any) {
+      if (err.message.includes('already exists')) {
+        res.status(409).json({ error: err.message });
+      } else if (err.message.includes('Invalid contextId')) {
+        res.status(400).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  });
+
+  app.get('/api/context', (_req: Request, res: Response) => {
+    const contexts = contextManager.list().map(id =>
+      contextManager.getInfo(id, sessionManager.isAlive(id))
+    );
+    res.json(contexts);
+  });
+
+  app.get('/api/context/:id', (req: Request, res: Response) => {
+    const contextId = paramStr(req.params.id);
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: 'Context not found' });
+      return;
+    }
+    const info = contextManager.getInfo(contextId, sessionManager.isAlive(contextId));
+    res.json(info);
+  });
+
+  app.delete('/api/context/:id', (req: Request, res: Response) => {
+    const contextId = paramStr(req.params.id);
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: 'Context not found' });
+      return;
+    }
+
+    sessionManager.killSession(contextId);
+    contextManager.delete(contextId);
+    console.log(`[api] Context '${contextId}' deleted`);
+    res.json({ deleted: contextId });
+  });
+
+  // -- Context tasks --
+
+  app.get('/api/context/:id/tasks', (req: Request, res: Response) => {
+    const contextId = paramStr(req.params.id);
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: 'Context not found' });
+      return;
+    }
+
+    const limit = parseInt(req.query.limit as string) || 20;
+    const tasks = queue.getContextTasks(contextId, limit);
+    res.json(tasks);
+  });
+
+  // -- Context files --
+
+  app.get('/api/context/:id/files', (req: Request, res: Response) => {
+    const contextId = paramStr(req.params.id);
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: 'Context not found' });
+      return;
+    }
+
+    const files = contextManager.listFiles(contextId);
+    res.json({ contextId, files });
+  });
+
+  // -- Context config update --
+
+  app.post('/api/context/:id/config', (req: Request, res: Response) => {
+    const contextId = paramStr(req.params.id);
+    if (!contextManager.exists(contextId)) {
+      res.status(404).json({ error: 'Context not found' });
+      return;
+    }
+
+    const parsed = UpdateConfigSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+
+    try {
+      const updated = contextManager.updateConfig(contextId, parsed.data);
+      res.json({ contextId, config: updated });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── Health ──
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    const contexts = contextManager.list();
+    res.json({
+      status: 'ok',
+      contexts: contexts.length,
+      activeSessions: [...sessionManager.getRunningContexts()],
+      queueStats: queue.stats(),
+    });
+  });
+
+  return { app, processQueue };
 }
 
-// Session events
-sessionManager.on('session:expired', (contextId: string) => {
-  console.log(`[session] Context '${contextId}' idle timeout — session expired`);
-});
+// ── Server startup (only when run directly) ──
 
-// Express API
-const app = express();
-app.use(express.json());
-
-// ── Tasks ──
-
-app.post('/api/task', (req, res) => {
-  const { contextId, prompt, webhook, priority } = req.body;
-
-  if (!contextId || !prompt) {
-    res.status(400).json({ error: 'contextId and prompt are required' });
-    return;
-  }
-
-  if (!contextManager.exists(contextId)) {
-    res.status(404).json({ error: `Context '${contextId}' not found. Create it first.` });
-    return;
-  }
-
-  const task = queue.enqueue(contextId, prompt, webhook, priority);
-  console.log(`[api] Task ${task.id} queued for context '${contextId}'`);
-
-  // Trigger queue processing
-  processQueue();
-
-  res.status(201).json({
-    taskId: task.id,
-    status: task.status,
-    contextId,
-  });
-});
-
-app.get('/api/task/:id', (req, res) => {
-  const task = queue.getTask(req.params.id);
-  if (!task) {
-    res.status(404).json({ error: 'Task not found' });
-    return;
-  }
-  res.json(task);
-});
-
-// ── Contexts ──
-
-app.post('/api/context', (req, res) => {
-  const { contextId, agentsMd, config } = req.body;
-
-  if (!contextId) {
-    res.status(400).json({ error: 'contextId is required' });
-    return;
-  }
-
+function isMainModule(): boolean {
   try {
-    const dir = contextManager.create(contextId, agentsMd, config);
-    console.log(`[api] Context '${contextId}' created at ${dir}`);
-    res.status(201).json({ contextId, path: dir });
-  } catch (err: any) {
-    res.status(409).json({ error: err.message });
+    const mainUrl = fileURLToPath(import.meta.url);
+    return process.argv[1] === mainUrl || process.argv[1]?.endsWith('/src/index.ts');
+  } catch {
+    return false;
   }
-});
+}
 
-app.get('/api/context', (_req, res) => {
-  const contexts = contextManager.list().map(id =>
-    contextManager.getInfo(id, sessionManager.isAlive(id))
-  );
-  res.json(contexts);
-});
+if (isMainModule()) {
+  const queue = new TaskQueue(DATA_DIR);
+  const contextManager = new ContextManager(CONTEXTS_DIR);
+  const sessionManager = new SessionManager(contextManager);
+  sessionManager.registerCleanupHandlers();
 
-app.get('/api/context/:id', (req, res) => {
-  const contextId = req.params.id;
-  if (!contextManager.exists(contextId)) {
-    res.status(404).json({ error: 'Context not found' });
-    return;
-  }
-  const info = contextManager.getInfo(contextId, sessionManager.isAlive(contextId));
-  res.json(info);
-});
+  const corsOrigins = process.env.CORS_ORIGINS || '*';
+  const { app } = createApp({ queue, contextManager, sessionManager, corsOrigins });
 
-app.delete('/api/context/:id', (req, res) => {
-  const contextId = req.params.id;
-  if (!contextManager.exists(contextId)) {
-    res.status(404).json({ error: 'Context not found' });
-    return;
-  }
+  const PORT = parseInt(process.env.PORT || '3456');
 
-  sessionManager.killSession(contextId);
-  contextManager.delete(contextId);
-  console.log(`[api] Context '${contextId}' deleted`);
-  res.json({ deleted: contextId });
-});
-
-// ── Health ──
-
-app.get('/api/health', (_req, res) => {
-  const contexts = contextManager.list();
-  res.json({
-    status: 'ok',
-    contexts: contexts.length,
-    activeSessions: [...sessionManager.getRunningContexts()],
-  });
-});
-
-// Start server
-const PORT = parseInt(process.env.PORT || '3456');
-
-app.listen(PORT, () => {
-  console.log(`
+  const server = app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════╗
 ║  Claude Runner v0.1.0                ║
 ║  http://localhost:${PORT}               ║
 ║                                      ║
-║  POST /api/context   Create context  ║
-║  POST /api/task      Submit task     ║
-║  GET  /api/task/:id  Task status     ║
-║  GET  /api/health    Health check    ║
+║  POST /api/context         Create    ║
+║  POST /api/task            Submit    ║
+║  GET  /api/task/:id        Status    ║
+║  GET  /api/context/:id/tasks  List   ║
+║  GET  /api/context/:id/files  Files  ║
+║  POST /api/context/:id/config Update ║
+║  GET  /api/health          Health    ║
 ╚══════════════════════════════════════╝
-  `);
-});
+    `);
+  });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[shutdown] Cleaning up...');
-  sessionManager.killAll();
-  queue.close();
-  process.exit(0);
-});
+  // Graceful shutdown
+  let shuttingDown = false;
 
-process.on('SIGTERM', () => {
-  sessionManager.killAll();
-  queue.close();
-  process.exit(0);
-});
+  function gracefulShutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[shutdown] ${signal} received. Stopping...`);
+
+    // Stop accepting new connections
+    server.close(() => {
+      console.log('[shutdown] Server closed');
+    });
+
+    // Kill sessions and close queue
+    sessionManager.killAll();
+    queue.close();
+
+    // Give in-flight requests a moment to finish
+    setTimeout(() => {
+      console.log('[shutdown] Done');
+      process.exit(0);
+    }, 2000);
+  }
+
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+}

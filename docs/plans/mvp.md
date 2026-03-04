@@ -62,14 +62,14 @@ Rewrite `src/session-manager.ts` with correct Claude Code SDK usage, session res
 ### Task 6: REST API with proper error handling and validation
 Rewrite `src/index.ts` with input validation, proper HTTP status codes, CORS, request logging, and graceful shutdown.
 
-- [ ] Add Zod validation for all request bodies
-- [ ] Add request logging middleware (method, path, status, duration)
-- [ ] Add CORS support (configurable origins)
-- [ ] Add graceful shutdown: stop accepting requests, drain queue, kill sessions
-- [ ] Add `GET /api/context/:id/tasks` endpoint (list tasks for context)
-- [ ] Add `GET /api/context/:id/files` endpoint (list workspace files)
-- [ ] Add `POST /api/context/:id/config` endpoint (update config)
-- [ ] Write API integration tests with supertest
+- [x] Add Zod validation for all request bodies
+- [x] Add request logging middleware (method, path, status, duration)
+- [x] Add CORS support (configurable origins)
+- [x] Add graceful shutdown: stop accepting requests, drain queue, kill sessions
+- [x] Add `GET /api/context/:id/tasks` endpoint (list tasks for context)
+- [x] Add `GET /api/context/:id/files` endpoint (list workspace files)
+- [x] Add `POST /api/context/:id/config` endpoint (update config)
+- [x] Write API integration tests with supertest
 
 ### Task 7: CLI client for quick testing
 Create a simple CLI client `src/cli.ts` for interacting with the server from terminal.
