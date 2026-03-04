@@ -85,11 +85,11 @@ Create a simple CLI client `src/cli.ts` for interacting with the server from ter
 ### Task 8: Default template and example context
 Create a useful default template and an example context showing MCP + tools integration.
 
-- [ ] Create `contexts/_template/AGENTS.md` with good default persona
-- [ ] Create `contexts/_template/config.json` with documented defaults
-- [ ] Create `contexts/_template/MEMORY.md` with starter content
-- [ ] Create `examples/customer-support/` showing: custom AGENTS.md, MCP server config (mock), CLI tool in tools/, sample data files
-- [ ] Update README.md with complete documentation, examples, and API reference
+- [x] Create `contexts/_template/AGENTS.md` with good default persona
+- [x] Create `contexts/_template/config.json` with documented defaults
+- [x] Create `contexts/_template/MEMORY.md` with starter content
+- [x] Create `examples/customer-support/` showing: custom AGENTS.md, MCP server config (mock), CLI tool in tools/, sample data files
+- [x] Update README.md with complete documentation, examples, and API reference
 
 ### Task 9: Integration tests — end-to-end flow
 Write integration tests that verify the full flow: create context → submit task → poll → get result.

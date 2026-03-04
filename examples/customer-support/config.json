@@ -1,0 +1,25 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "maxTurns": 30,
+  "historyWindow": 10,
+  "idleTimeoutMs": 600000,
+  "maxConcurrentSessions": 3,
+  "executionTimeoutMs": 300000,
+  "mcpServers": {
+    "crm": {
+      "command": "node",
+      "args": ["tools/mock-crm-server.js"],
+      "env": {
+        "CRM_API_URL": "https://api.example-crm.com",
+        "CRM_API_KEY": "your-api-key-here"
+      }
+    }
+  },
+  "env": {
+    "SUPPORT_TEAM": "tier-1",
+    "COMPANY_NAME": "Acme Corp"
+  },
+  "tools": {
+    "allowedCommands": ["node", "bash", "curl", "jq"]
+  }
+}

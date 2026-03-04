@@ -1,0 +1,25 @@
+{
+  "returns": {
+    "window_days": 30,
+    "condition": "unused, original packaging",
+    "refund_processing_days": "5-7 business days",
+    "exceptions": ["Custom orders", "Digital products", "Sale items under $10"]
+  },
+  "shipping": {
+    "domestic": {
+      "standard": "5-7 business days",
+      "express": "2-3 business days",
+      "free_threshold": 50.00
+    },
+    "international": {
+      "standard": "7-14 business days",
+      "express": "3-5 business days",
+      "eu_delay_notice": "Add 3-5 business days due to ongoing delays"
+    }
+  },
+  "refunds": {
+    "method": "Original payment method",
+    "partial_refund_minimum": 5.00,
+    "store_credit_bonus": "10% extra if choosing store credit"
+  }
+}
