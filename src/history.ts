@@ -1,6 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { HistoryTurn } from './types.js';
+import { HistoryTurn, HistoryStats } from './types.js';
+
+/**
+ * Estimate token count from text content.
+ * Uses a rough heuristic of ~4 characters per token.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
 export class HistoryManager {
   private contextDir: string;
@@ -17,24 +25,38 @@ export class HistoryManager {
     return path.join(this.contextDir, 'history', 'turns.jsonl');
   }
 
-  append(turn: HistoryTurn) {
+  /**
+   * Append a turn to the history JSONL file.
+   */
+  append(turn: HistoryTurn): void {
     const line = JSON.stringify(turn) + '\n';
     fs.appendFileSync(this.historyFile(), line, 'utf-8');
   }
 
-  getRecent(limit = 20): HistoryTurn[] {
+  /**
+   * Read all turns from the JSONL file.
+   */
+  private readAll(): HistoryTurn[] {
     const file = this.historyFile();
     if (!fs.existsSync(file)) return [];
 
     const content = fs.readFileSync(file, 'utf-8').trim();
     if (!content) return [];
 
-    const lines = content.split('\n');
-    const recent = lines.slice(-limit);
-    return recent.map(line => JSON.parse(line) as HistoryTurn);
+    return content.split('\n').map(line => JSON.parse(line) as HistoryTurn);
   }
 
-  // Format history as conversation messages for Claude Code SDK
+  /**
+   * Get the most recent N turns.
+   */
+  getRecent(limit = 20): HistoryTurn[] {
+    const all = this.readAll();
+    return all.slice(-limit);
+  }
+
+  /**
+   * Format history as conversation messages for Claude Code SDK.
+   */
   formatForSdk(limit = 20): Array<{ role: 'user' | 'assistant'; content: string }> {
     return this.getRecent(limit).map(turn => ({
       role: turn.role,
@@ -42,7 +64,79 @@ export class HistoryManager {
     }));
   }
 
-  clear() {
+  /**
+   * Format history as a markdown context block for prompt injection.
+   */
+  formatForPrompt(limit = 20): string {
+    const turns = this.getRecent(limit);
+    if (turns.length === 0) return '';
+
+    const lines: string[] = ['## Conversation History', ''];
+    for (const turn of turns) {
+      const date = new Date(turn.timestamp).toISOString();
+      const roleLabel = turn.role === 'user' ? 'User' : 'Assistant';
+      lines.push(`### ${roleLabel} (${date})`);
+      lines.push(turn.content);
+      lines.push('');
+    }
+
+    return lines.join('\n').trimEnd();
+  }
+
+  /**
+   * Compact history by keeping only the most recent N turns.
+   * Returns a summary string describing the compacted turns.
+   */
+  compact(keepLast: number): string {
+    const all = this.readAll();
+
+    if (all.length <= keepLast) {
+      return `No compaction needed (${all.length} turns, keeping ${keepLast})`;
+    }
+
+    const removed = all.slice(0, all.length - keepLast);
+    const kept = keepLast === 0 ? [] : all.slice(-keepLast);
+
+    // Build summary of removed turns
+    const removedTokens = removed.reduce((sum, t) => sum + t.tokenEstimate, 0);
+    const taskIds = [...new Set(removed.map(t => t.taskId))];
+    const summary = `Compacted ${removed.length} turns (~${removedTokens} tokens) from ${taskIds.length} task(s): ${taskIds.join(', ')}`;
+
+    // Rewrite the file with only the kept turns
+    const file = this.historyFile();
+    const content = kept.map(t => JSON.stringify(t)).join('\n') + '\n';
+    fs.writeFileSync(file, content, 'utf-8');
+
+    return summary;
+  }
+
+  /**
+   * Get statistics about the history.
+   */
+  getStats(): HistoryStats {
+    const all = this.readAll();
+
+    if (all.length === 0) {
+      return {
+        totalTurns: 0,
+        estimatedTokens: 0,
+        oldestTimestamp: null,
+        newestTimestamp: null,
+      };
+    }
+
+    return {
+      totalTurns: all.length,
+      estimatedTokens: all.reduce((sum, t) => sum + t.tokenEstimate, 0),
+      oldestTimestamp: all[0].timestamp,
+      newestTimestamp: all[all.length - 1].timestamp,
+    };
+  }
+
+  /**
+   * Clear all history.
+   */
+  clear(): void {
     const file = this.historyFile();
     if (fs.existsSync(file)) fs.unlinkSync(file);
   }

@@ -60,6 +60,14 @@ export interface HistoryTurn {
   content: string;
   timestamp: number;
   taskId: string;
+  tokenEstimate: number;
+}
+
+export interface HistoryStats {
+  totalTurns: number;
+  estimatedTokens: number;
+  oldestTimestamp: number | null;
+  newestTimestamp: number | null;
 }
 
 // ── Context Info ──

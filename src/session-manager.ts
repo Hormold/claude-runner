@@ -61,6 +61,7 @@ export class SessionManager extends EventEmitter {
         content: prompt,
         timestamp: Date.now(),
         taskId,
+        tokenEstimate: Math.ceil(prompt.length / 4),
       });
 
       // Build the full prompt with history context
@@ -109,6 +110,7 @@ export class SessionManager extends EventEmitter {
         content: result,
         timestamp: Date.now(),
         taskId,
+        tokenEstimate: Math.ceil(result.length / 4),
       });
 
       return result;

@@ -42,11 +42,11 @@ Rewrite `src/context.ts` with template support, validation, and proper file oper
 ### Task 4: History manager with compaction
 Rewrite `src/history.ts` with proper structure, compaction for long-running contexts, and tests.
 
-- [ ] Store turns as `{role, content, timestamp, taskId, tokenEstimate}` in JSONL
-- [ ] Add `compact(keepLast: number)` — summarize old turns, keep recent ones
-- [ ] Add `getStats()` — total turns, estimated tokens, oldest/newest timestamps
-- [ ] Add `formatForPrompt(limit)` — format history as markdown context block
-- [ ] Write tests: append, getRecent, formatForPrompt, compaction, empty history, large history
+- [x] Store turns as `{role, content, timestamp, taskId, tokenEstimate}` in JSONL
+- [x] Add `compact(keepLast: number)` — summarize old turns, keep recent ones
+- [x] Add `getStats()` — total turns, estimated tokens, oldest/newest timestamps
+- [x] Add `formatForPrompt(limit)` — format history as markdown context block
+- [x] Write tests: append, getRecent, formatForPrompt, compaction, empty history, large history
 
 ### Task 5: Session manager with proper SDK integration
 Rewrite `src/session-manager.ts` with correct Claude Code SDK usage, session resume, error handling, and resource management.
