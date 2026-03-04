@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { TaskQueue } from './queue.js';
 import { ContextManager } from './context.js';
 import { SessionManager } from './session-manager.js';
+import { McpServerConfigSchema } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -33,7 +34,11 @@ const UpdateConfigSchema = z.object({
   idleTimeoutMs: z.number().int().positive().optional(),
   maxConcurrentSessions: z.number().int().positive().optional(),
   executionTimeoutMs: z.number().int().positive().optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
+  tools: z.object({
+    allowedCommands: z.array(z.string()).optional(),
+  }).optional(),
 }).strict();
 
 function paramStr(val: string | string[] | undefined): string {
@@ -106,6 +111,11 @@ export function createApp(deps: AppDeps) {
         const runningContexts = sessionManager.getRunningContexts();
         // Merge in-flight dispatched contexts that haven't registered in SessionManager yet
         for (const ctx of dispatched) runningContexts.add(ctx);
+
+        // Don't dispatch beyond max concurrent sessions
+        const totalInFlight = sessionManager.getRunningCount() + dispatched.size;
+        if (totalInFlight >= sessionManager.getMaxConcurrent()) break;
+
         const task = queue.nextAvailable(runningContexts);
         if (!task) break;
 
@@ -266,7 +276,7 @@ export function createApp(deps: AppDeps) {
       return;
     }
 
-    const limit = parseInt(req.query.limit as string) || 20;
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 20, 1), 100);
     const tasks = queue.getContextTasks(contextId, limit);
     res.json(tasks);
   });
@@ -380,6 +390,9 @@ if (isMainModule()) {
     server.close(() => {
       console.log('[shutdown] Server closed');
     });
+
+    // Mark running tasks as failed so they don't block contexts on restart
+    queue.expireStuckTasks(0);
 
     // Abort running tasks, kill sessions, close queue
     sessionManager.abortAll();

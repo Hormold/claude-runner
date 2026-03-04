@@ -130,7 +130,14 @@ export class ContextManager {
     }
 
     const current = this.getConfig(contextId);
-    const merged = parseConfig({ ...current, ...partial });
+    const merged = parseConfig({
+      ...current,
+      ...partial,
+      // Deep merge nested objects so partial updates don't wipe existing entries
+      env: partial.env ? { ...current.env, ...partial.env } : current.env,
+      mcpServers: partial.mcpServers ? { ...current.mcpServers, ...partial.mcpServers } : current.mcpServers,
+      tools: partial.tools ? { ...current.tools, ...partial.tools } : current.tools,
+    });
 
     fs.writeFileSync(
       path.join(dir, 'config.json'),

@@ -43,7 +43,14 @@ export class HistoryManager {
     const content = fs.readFileSync(file, 'utf-8').trim();
     if (!content) return [];
 
-    return content.split('\n').map(line => JSON.parse(line) as HistoryTurn);
+    return content.split('\n').reduce<HistoryTurn[]>((turns, line) => {
+      try {
+        turns.push(JSON.parse(line) as HistoryTurn);
+      } catch {
+        // Skip corrupted lines to prevent total history loss
+      }
+      return turns;
+    }, []);
   }
 
   /**
