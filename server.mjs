@@ -4,24 +4,29 @@
  * Accepts tasks, runs them in isolated Docker containers,
  * returns structured JSON output with cost tracking.
  *
- * API:
- *   POST   /task             Submit task (queued if session busy)
- *   POST   /task/:id/abort   Abort running task + kill container
- *   GET    /sessions         List all sessions
- *   GET    /session/:id      Session details
- *   DELETE /session/:id      Delete session (kill container + wipe state)
- *   POST   /session/:id/reset  Reset to clean state (keep session)
- *   GET    /health           Health check
+ * HTTP API:
+ *   POST   /task              Submit task (queued if session busy)
+ *   POST   /task/:id/abort    Abort running task + kill container
+ *   GET    /sessions          List all sessions
+ *   GET    /session/:id       Session details
+ *   DELETE /session/:id       Delete session (kill container + wipe state)
+ *   POST   /session/:id/reset Reset to clean state
+ *   GET    /health            Health check
+ *
+ * WebSocket:
+ *   GET /stream/:sessionId    Live event stream (upgrade to WS)
+ *     Events: init, thinking, text, tool_start, tool_end, result, error
  */
 
 import http from 'http';
 import { execSync, spawn } from 'child_process';
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync,
-  cpSync, readdirSync, rmSync
+  cpSync, readdirSync, rmSync, createReadStream
 } from 'fs';
 import { join, resolve } from 'path';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import { createInterface } from 'readline';
 
 // ── Config ──
 
@@ -31,7 +36,7 @@ const SESSIONS_DIR = resolve(process.env.SESSIONS_DIR || './sessions');
 const DOCKER_IMAGE = process.env.DOCKER_IMAGE || 'claude-runner';
 const MODEL        = process.env.MODEL || 'claude-sonnet-4-20250514';
 const MAX_TURNS    = parseInt(process.env.MAX_TURNS || '10');
-const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT_MS || '300000'); // 5 min
+const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
 
 // ── Auth ──
 
@@ -56,29 +61,19 @@ function initSession(id, env = {}) {
   if (!existsSync(dir)) {
     mkdirSync(join(dir, 'data'), { recursive: true });
     mkdirSync(join(dir, '.claude'), { recursive: true });
-
-    // Copy agent files into session workspace
     cpSync(join(AGENT_DIR, 'AGENTS.md'), join(dir, 'AGENTS.md'));
     const output = join(AGENT_DIR, 'OUTPUT.md');
     if (existsSync(output)) cpSync(output, join(dir, 'OUTPUT.md'));
     const tools = join(AGENT_DIR, 'tools');
     if (existsSync(tools)) cpSync(tools, join(dir, 'tools'), { recursive: true });
-
-    saveState(id, {
-      created: new Date().toISOString(),
-      lastActive: new Date().toISOString(),
-      turns: 0,
-      sdkSessionId: null,
-      env, // custom env vars stored for container
-    });
+    saveState(id, { created: new Date().toISOString(), lastActive: new Date().toISOString(), turns: 0, sdkSessionId: null, env });
     log(`session:create ${id}`);
   }
   return dir;
 }
 
 function loadState(id) {
-  try { return JSON.parse(readFileSync(statePath(id), 'utf-8')); }
-  catch { return null; }
+  try { return JSON.parse(readFileSync(statePath(id), 'utf-8')); } catch { return null; }
 }
 
 function saveState(id, state) {
@@ -89,11 +84,7 @@ function resetSession(id) {
   const state = loadState(id);
   const dir = sessionDir(id);
   if (!existsSync(dir)) return false;
-
-  // Wipe entire session directory
   rmSync(dir, { recursive: true, force: true });
-
-  // Re-initialize from agent template
   initSession(id, state?.env || {});
   return true;
 }
@@ -104,9 +95,7 @@ function listSessions() {
     .filter(d => d.isDirectory())
     .map(d => {
       const state = loadState(d.name);
-      const busy = runningTasks.has(d.name);
-      const queued = taskQueues.get(d.name)?.length || 0;
-      return { sessionId: d.name, ...state, busy, queued };
+      return { sessionId: d.name, ...state, busy: runningTasks.has(d.name), queued: taskQueues.get(d.name)?.length || 0 };
     });
 }
 
@@ -119,12 +108,61 @@ function deleteSession(id) {
 }
 
 // ══════════════════════════════════════
-//  Task Queue (one task at a time per session)
+//  WebSocket (minimal, no deps)
 // ══════════════════════════════════════
 
-const taskQueues   = new Map();  // sessionId → [{taskId, message, context, resolve, reject}]
-const runningTasks = new Map();  // sessionId → {taskId, process, aborted}
-const idleTimers   = new Map();  // sessionId → timeout
+const wsClients = new Map(); // sessionId → Set<socket>
+
+function wsAccept(req, socket, head) {
+  const key = req.headers['sec-websocket-key'];
+  const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-5AB5DC525DB3').digest('base64');
+  socket.write([
+    'HTTP/1.1 101 Switching Protocols',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Accept: ${accept}`,
+    '', ''
+  ].join('\r\n'));
+  return socket;
+}
+
+function wsSend(socket, data) {
+  try {
+    const payload = Buffer.from(JSON.stringify(data));
+    const len = payload.length;
+    let frame;
+    if (len < 126) {
+      frame = Buffer.alloc(2 + len);
+      frame[0] = 0x81; frame[1] = len;
+      payload.copy(frame, 2);
+    } else if (len < 65536) {
+      frame = Buffer.alloc(4 + len);
+      frame[0] = 0x81; frame[1] = 126;
+      frame.writeUInt16BE(len, 2);
+      payload.copy(frame, 4);
+    } else {
+      frame = Buffer.alloc(10 + len);
+      frame[0] = 0x81; frame[1] = 127;
+      frame.writeBigUInt64BE(BigInt(len), 2);
+      payload.copy(frame, 10);
+    }
+    socket.write(frame);
+  } catch {}
+}
+
+function wsBroadcast(sessionId, data) {
+  const clients = wsClients.get(sessionId);
+  if (!clients) return;
+  for (const s of clients) wsSend(s, data);
+}
+
+// ══════════════════════════════════════
+//  Task Queue
+// ══════════════════════════════════════
+
+const taskQueues   = new Map();
+const runningTasks = new Map();
+const idleTimers   = new Map();
 
 function enqueueTask(sessionId, message, context, env) {
   const taskId = randomUUID().slice(0, 8);
@@ -137,13 +175,11 @@ function enqueueTask(sessionId, message, context, env) {
 }
 
 async function processQueue(sessionId) {
-  if (runningTasks.has(sessionId)) return; // already running
+  if (runningTasks.has(sessionId)) return;
   const queue = taskQueues.get(sessionId);
   if (!queue || queue.length === 0) return;
-
   const task = queue.shift();
   clearIdleTimer(sessionId);
-
   try {
     runningTasks.set(sessionId, { taskId: task.taskId, process: null, aborted: false });
     const result = await executeTask(sessionId, task);
@@ -153,7 +189,7 @@ async function processQueue(sessionId) {
   } finally {
     runningTasks.delete(sessionId);
     resetIdleTimer(sessionId);
-    processQueue(sessionId); // next task
+    processQueue(sessionId);
   }
 }
 
@@ -163,37 +199,28 @@ function abortTask(sessionId) {
   running.aborted = true;
   if (running.process) {
     try { running.process.kill('SIGTERM'); } catch {}
-    // Also force-kill the docker container
     const name = `agent-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${running.taskId}`;
     try { execSync(`docker kill ${name} 2>/dev/null`); } catch {}
   }
-  // Reject all queued tasks too
   const queue = taskQueues.get(sessionId) || [];
   for (const t of queue) t.reject(new Error('Session aborted'));
   taskQueues.set(sessionId, []);
+  wsBroadcast(sessionId, { type: 'abort', taskId: running.taskId });
   log(`abort ${sessionId} task=${running.taskId}`);
   return true;
 }
 
-// ── Idle timeout ──
-
 function resetIdleTimer(sessionId) {
   clearIdleTimer(sessionId);
-  idleTimers.set(sessionId, setTimeout(() => {
-    log(`idle:timeout ${sessionId}`);
-    idleTimers.delete(sessionId);
-  }, IDLE_TIMEOUT));
+  idleTimers.set(sessionId, setTimeout(() => { idleTimers.delete(sessionId); }, IDLE_TIMEOUT));
 }
 
 function clearIdleTimer(sessionId) {
-  if (idleTimers.has(sessionId)) {
-    clearTimeout(idleTimers.get(sessionId));
-    idleTimers.delete(sessionId);
-  }
+  if (idleTimers.has(sessionId)) { clearTimeout(idleTimers.get(sessionId)); idleTimers.delete(sessionId); }
 }
 
 // ══════════════════════════════════════
-//  Docker Execution
+//  Docker Execution (with streaming)
 // ══════════════════════════════════════
 
 function executeTask(sessionId, task) {
@@ -202,7 +229,6 @@ function executeTask(sessionId, task) {
   const token = getOAuthToken();
   if (!token) throw new Error('No API token configured');
 
-  // Build prompts
   let systemPrompt = readFileSync(join(dir, 'AGENTS.md'), 'utf-8');
   const outputMd = join(dir, 'OUTPUT.md');
   if (existsSync(outputMd)) systemPrompt += '\n\n---\n\n' + readFileSync(outputMd, 'utf-8');
@@ -214,80 +240,82 @@ function executeTask(sessionId, task) {
   const script = buildScript(prompt, systemPrompt, state?.sdkSessionId);
   const containerName = `agent-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${task.taskId}`;
 
-  // Build docker args
   const dockerArgs = [
-    'run', '--rm',
-    '--name', containerName,
+    'run', '--rm', '--name', containerName,
     '-v', `${dir}:/workspace`,
     '-v', `${join(dir, '.claude')}:/home/runner/.claude`,
     '-e', `CLAUDE_CODE_OAUTH_TOKEN=${token}`,
     '-e', 'NODE_PATH=/app/node_modules',
   ];
-
-  // Pass through custom env vars from session
   const envVars = { ...state?.env, ...task.env };
   for (const [k, v] of Object.entries(envVars)) {
     if (k && v !== undefined) dockerArgs.push('-e', `${k}=${v}`);
   }
-
   dockerArgs.push('-w', '/workspace', '--entrypoint', 'node', DOCKER_IMAGE, '--input-type=module', '-e', script);
 
   const start = Date.now();
+  wsBroadcast(sessionId, { type: 'task_start', taskId: task.taskId, sessionId });
 
   return new Promise((resolve, reject) => {
     const child = spawn('docker', dockerArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-    // Store process reference for abort
     const running = runningTasks.get(sessionId);
     if (running) running.process = child;
 
-    let stdout = '', stderr = '';
-    child.stdout.on('data', d => stdout += d);
+    let finalResult = null;
+
+    // Stream stdout line by line (NDJSON from Docker)
+    const rl = createInterface({ input: child.stdout });
+    rl.on('line', (line) => {
+      try {
+        const evt = JSON.parse(line);
+        if (evt._final) {
+          finalResult = evt; // Last line is the final result
+        } else {
+          wsBroadcast(sessionId, evt); // Forward event to WebSocket clients
+        }
+      } catch {}
+    });
+
+    let stderr = '';
     child.stderr.on('data', d => stderr += d);
 
     child.on('close', (code) => {
       if (running?.aborted) return reject(new Error('Task aborted'));
+      if (!finalResult) return reject(new Error(`Container exit ${code}: ${stderr.slice(-300)}`));
 
-      if (!stdout.trim()) return reject(new Error(`Container exit ${code}: ${stderr.slice(-300)}`));
+      const tools = (stderr.match(/tool:\S+/g) || []).map(t => t.replace('tool:', ''));
 
-      try {
-        const raw = JSON.parse(stdout.trim());
-        const tools = (stderr.match(/tool:\S+/g) || []).map(t => t.replace('tool:', ''));
-
-        // Parse structured output if OUTPUT.md exists
-        let output = null;
-        if (existsSync(outputMd) && raw.result) {
-          try {
-            const m = raw.result.match(/```json\s*([\s\S]*?)```/) || [null, raw.result];
-            const jsonStr = m[1] || raw.result;
-            const j = jsonStr.match(/\{[\s\S]*\}/);
-            if (j) output = JSON.parse(j[0]);
-          } catch {}
-        }
-
-        // Update state
-        saveState(sessionId, {
-          ...state,
-          sdkSessionId: raw.sessionId || state?.sdkSessionId,
-          lastActive: new Date().toISOString(),
-          turns: (state?.turns || 0) + 1,
-          env: envVars,
-        });
-
-        resolve({
-          taskId: task.taskId,
-          sessionId,
-          output,
-          response: output ? undefined : raw.result,
-          cost: raw.cost || 0,
-          duration: Date.now() - start,
-          tools,
-          resumed: !!(state?.sdkSessionId),
-        });
-
-      } catch (e) {
-        reject(new Error(`Bad output: ${stdout.slice(0, 200)}`));
+      // Parse structured output
+      let output = null;
+      if (existsSync(outputMd) && finalResult.result) {
+        try {
+          const m = finalResult.result.match(/```json\s*([\s\S]*?)```/) || [null, finalResult.result];
+          const j = (m[1] || finalResult.result).match(/\{[\s\S]*\}/);
+          if (j) output = JSON.parse(j[0]);
+        } catch {}
       }
+
+      saveState(sessionId, {
+        ...state,
+        sdkSessionId: finalResult.sessionId || state?.sdkSessionId,
+        lastActive: new Date().toISOString(),
+        turns: (state?.turns || 0) + 1,
+        env: envVars,
+      });
+
+      const response = {
+        taskId: task.taskId,
+        sessionId,
+        output,
+        response: output ? undefined : finalResult.result,
+        cost: finalResult.cost || 0,
+        duration: Date.now() - start,
+        tools,
+        resumed: !!(state?.sdkSessionId),
+      };
+
+      wsBroadcast(sessionId, { type: 'task_complete', ...response });
+      resolve(response);
     });
 
     child.on('error', reject);
@@ -298,26 +326,73 @@ function buildScript(prompt, systemPrompt, resumeId) {
   const p = JSON.stringify(prompt);
   const s = JSON.stringify(systemPrompt);
   const r = resumeId ? `resume: ${JSON.stringify(resumeId)},` : '';
+  // Script outputs NDJSON: one event per line, last line is _final
   return `
 import { query } from '/app/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
+
+function emit(evt) { process.stdout.write(JSON.stringify(evt) + '\\n'); }
+
 const stream = query({
   prompt: ${p},
   options: {
     model: '${MODEL}', maxTurns: ${MAX_TURNS}, cwd: '/workspace',
     systemPrompt: ${s}, ${r}
     permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
+    includePartialMessages: true,
   }
 });
+
 let result = '', sid = '', cost = 0;
+
 for await (const m of stream) {
-  if (m.type === 'system' && m.subtype === 'init') sid = m.session_id;
-  if (m.type === 'assistant' && m.message?.content)
-    for (const b of m.message.content) if (b.type === 'tool_use') process.stderr.write('tool:' + b.name + ' ');
+  // Init
+  if (m.type === 'system' && m.subtype === 'init') {
+    sid = m.session_id;
+    emit({ type: 'init', sessionId: sid, model: m.model, tools: m.tools });
+  }
+
+  // Partial text streaming
+  if (m.type === 'stream_event' && m.event) {
+    const e = m.event;
+    if (e.type === 'content_block_start' && e.content_block?.type === 'thinking') {
+      emit({ type: 'thinking_start' });
+    }
+    if (e.type === 'content_block_delta') {
+      if (e.delta?.type === 'thinking_delta') {
+        emit({ type: 'thinking', text: e.delta.thinking });
+      }
+      if (e.delta?.type === 'text_delta') {
+        emit({ type: 'text', text: e.delta.text });
+      }
+    }
+    if (e.type === 'content_block_stop') {
+      // noop — boundary marker
+    }
+  }
+
+  // Tool use
+  if (m.type === 'assistant' && m.message?.content) {
+    for (const b of m.message.content) {
+      if (b.type === 'tool_use') {
+        emit({ type: 'tool_start', tool: b.name, input: b.input });
+        process.stderr.write('tool:' + b.name + ' ');
+      }
+    }
+  }
+
+  // Tool result
+  if (m.type === 'user' && m.tool_use_result !== undefined) {
+    emit({ type: 'tool_end', result: typeof m.tool_use_result === 'string' ? m.tool_use_result.slice(0, 500) : JSON.stringify(m.tool_use_result).slice(0, 500) });
+  }
+
+  // Final result
   if (m.type === 'result' && m.subtype === 'success') {
     result = m.result || ''; cost = m.total_cost_usd || 0;
   }
 }
-console.log(JSON.stringify({ result, sessionId: sid, cost }));
+
+// Last line: final result (marked with _final)
+emit({ _final: true, result, sessionId: sid, cost });
 `;
 }
 
@@ -349,64 +424,44 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
-  // CORS preflight
   if (req.method === 'OPTIONS') return json(res, {});
 
   try {
-    // POST /task — submit task
     if (req.method === 'POST' && path === '/task') {
       const body = await readBody(req);
-      if (!body?.sessionId || !body?.message)
-        return json(res, { error: 'sessionId and message required' }, 400);
-
+      if (!body?.sessionId || !body?.message) return json(res, { error: 'sessionId and message required' }, 400);
       const result = await enqueueTask(body.sessionId, body.message, body.context, body.env);
       return json(res, result);
     }
 
-    // POST /task/:id/abort — abort running task
     if (req.method === 'POST' && path.match(/^\/task\/(.+)\/abort$/)) {
       const id = path.split('/')[2];
-      const aborted = abortTask(id);
-      return json(res, { sessionId: id, aborted });
+      return json(res, { sessionId: id, aborted: abortTask(id) });
     }
 
-    // GET /sessions — list all
-    if (req.method === 'GET' && path === '/sessions') {
-      return json(res, listSessions());
-    }
+    if (req.method === 'GET' && path === '/sessions') return json(res, listSessions());
 
-    // GET /session/:id — details
     if (req.method === 'GET' && path.match(/^\/session\/[^/]+$/)) {
       const id = path.split('/')[2];
       const state = loadState(id);
       if (!state) return json(res, { error: 'Session not found' }, 404);
-      const busy = runningTasks.has(id);
-      const queued = taskQueues.get(id)?.length || 0;
-      return json(res, { sessionId: id, ...state, busy, queued });
+      return json(res, { sessionId: id, ...state, busy: runningTasks.has(id), queued: taskQueues.get(id)?.length || 0 });
     }
 
-    // DELETE /session/:id — delete
     if (req.method === 'DELETE' && path.match(/^\/session\/[^/]+$/)) {
       const id = path.split('/')[2];
       deleteSession(id);
       return json(res, { deleted: id });
     }
 
-    // POST /session/:id/reset — reset to clean state
     if (req.method === 'POST' && path.match(/^\/session\/(.+)\/reset$/)) {
       const id = path.split('/')[2];
       abortTask(id);
-      const ok = resetSession(id);
-      return json(res, { sessionId: id, reset: ok });
+      return json(res, { sessionId: id, reset: resetSession(id) });
     }
 
-    // GET /health
     if (req.method === 'GET' && path === '/health') {
-      return json(res, {
-        status: 'ok',
-        sessions: existsSync(SESSIONS_DIR) ? readdirSync(SESSIONS_DIR).length : 0,
-        activeTasks: runningTasks.size,
-      });
+      return json(res, { status: 'ok', sessions: existsSync(SESSIONS_DIR) ? readdirSync(SESSIONS_DIR).length : 0, activeTasks: runningTasks.size });
     }
 
     json(res, { error: 'Not found' }, 404);
@@ -416,19 +471,57 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// WebSocket upgrade handler
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://localhost:${PORT}`);
+  const match = url.pathname.match(/^\/stream\/(.+)$/);
+
+  if (!match || !req.headers['sec-websocket-key']) {
+    socket.destroy();
+    return;
+  }
+
+  const sessionId = match[1];
+  const ws = wsAccept(req, socket, head);
+
+  if (!wsClients.has(sessionId)) wsClients.set(sessionId, new Set());
+  wsClients.get(sessionId).add(ws);
+  log(`ws:connect ${sessionId} (${wsClients.get(sessionId).size} clients)`);
+
+  // Send current status
+  const state = loadState(sessionId);
+  const busy = runningTasks.has(sessionId);
+  wsSend(ws, { type: 'connected', sessionId, busy, turns: state?.turns || 0 });
+
+  ws.on('close', () => {
+    wsClients.get(sessionId)?.delete(ws);
+    if (wsClients.get(sessionId)?.size === 0) wsClients.delete(sessionId);
+    log(`ws:disconnect ${sessionId}`);
+  });
+
+  ws.on('error', () => {
+    wsClients.get(sessionId)?.delete(ws);
+  });
+});
+
 server.listen(PORT, () => {
   log(`Claude Runner started on http://localhost:${PORT}`);
   log(`Agent: ${AGENT_DIR}`);
   log(`Image: ${DOCKER_IMAGE}`);
   log(`Model: ${MODEL}`);
   console.log(`
-  POST   /task                Submit task {sessionId, message, context?, env?}
-  POST   /task/:id/abort      Abort running task
-  GET    /sessions             List sessions
-  GET    /session/:id          Session details
-  DELETE /session/:id          Delete session
-  POST   /session/:id/reset    Reset session to clean state
-  GET    /health               Health check
+  HTTP:
+    POST   /task                Submit task {sessionId, message, context?, env?}
+    POST   /task/:id/abort      Abort running task
+    GET    /sessions             List sessions
+    GET    /session/:id          Session details
+    DELETE /session/:id          Delete session
+    POST   /session/:id/reset    Reset session
+    GET    /health               Health check
+
+  WebSocket:
+    ws://localhost:${PORT}/stream/:sessionId
+    Events: init, thinking, text, tool_start, tool_end, task_complete, abort
 `);
 });
 

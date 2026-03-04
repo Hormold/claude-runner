@@ -81,6 +81,31 @@ Kills the container and rejects queued tasks.
 
 ### `GET /health`
 
+### `WS /stream/:sessionId` — Live Event Stream
+
+Connect via WebSocket to receive real-time events from a session:
+
+```javascript
+const ws = new WebSocket('ws://localhost:3456/stream/user-123');
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+
+  switch (data.type) {
+    case 'connected':    // Session connected, {busy, turns}
+    case 'init':         // Agent started, {model, tools}
+    case 'thinking':     // Agent thinking, {text} (partial)
+    case 'text':         // Agent text output, {text} (partial)
+    case 'tool_start':   // Tool called, {tool, input}
+    case 'tool_end':     // Tool finished, {result}
+    case 'task_complete': // Task done, {output, cost, duration, tools}
+    case 'abort':        // Task aborted, {taskId}
+  }
+};
+```
+
+Connect BEFORE sending `/task` to catch all events. Events stream in real-time as the agent works.
+
 ## Customization
 
 ### 1. Agent Prompt (`agent/AGENTS.md`)

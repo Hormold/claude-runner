@@ -133,9 +133,65 @@ curl -sf -X DELETE $BASE/session/bob | python3 -c "
 import sys,json; print(f'   deleted: {json.load(sys.stdin).get(\"deleted\")}')
 " && pass "Session bob deleted" || fail "Delete failed"
 
-# ── 9. Workspace isolation ──
+# ── 9. WebSocket streaming ──
 echo ""
-echo -e "${BOLD}9. Workspace Isolation${NC}"
+echo -e "${BOLD}9. WebSocket Streaming${NC}"
+# Combined test: WS listener + HTTP task in one node script
+WS_LOG=$(mktemp)
+node -e "
+const http = require('http');
+const crypto = require('crypto');
+
+const events = [];
+const key = crypto.randomBytes(16).toString('base64');
+
+// 1. Connect WebSocket
+const req = http.request({hostname:'localhost',port:3456,path:'/stream/ws-test',headers:{
+  'Upgrade':'websocket','Connection':'Upgrade','Sec-WebSocket-Key':key,'Sec-WebSocket-Version':'13'
+}});
+
+req.on('upgrade',(res,socket)=>{
+  let buf=Buffer.alloc(0);
+  socket.on('data',(d)=>{
+    buf=Buffer.concat([buf,d]);
+    while(buf.length>=2){
+      let len=buf[1]&0x7f,off=2;
+      if(len===126){len=buf.readUInt16BE(2);off=4;}
+      else if(len===127){len=Number(buf.readBigUInt64BE(2));off=10;}
+      if(buf.length<off+len)break;
+      const msg=buf.slice(off,off+len).toString();
+      buf=buf.slice(off+len);
+      try{const e=JSON.parse(msg);events.push(e.type);
+        if(e.type==='task_complete'){
+          // Done — print events and exit
+          for(const t of events) process.stdout.write(t+'\\n');
+          process.exit(0);
+        }
+      }catch{}
+    }
+  });
+  socket.on('close',()=>{for(const t of events)process.stdout.write(t+'\\n');process.exit(0);});
+
+  // 2. After connected, send task via HTTP
+  setTimeout(()=>{
+    const r2=http.request({hostname:'localhost',port:3456,path:'/task',method:'POST',headers:{'Content-Type':'application/json'}});
+    r2.write(JSON.stringify({sessionId:'ws-test',message:'Say just the word hello'}));
+    r2.end();
+  },500);
+});
+req.end();
+" > "$WS_LOG" 2>/dev/null
+
+WS_EVENTS=$(cat "$WS_LOG" | sort | uniq -c | sort -rn)
+echo "   Events received:"
+echo "$WS_EVENTS" | head -8 | while read line; do echo "     $line"; done
+WS_COUNT=$(cat "$WS_LOG" | wc -l | tr -d ' ')
+rm -f "$WS_LOG"
+[ "$WS_COUNT" -gt 2 ] && pass "WebSocket: $WS_COUNT events streamed" || fail "WebSocket: only $WS_COUNT events"
+
+# ── 10. Workspace isolation ──
+echo ""
+echo -e "${BOLD}10. Workspace Isolation${NC}"
 for u in alice; do
   DIR="sessions/$u"
   if [ -d "$DIR" ]; then
@@ -168,5 +224,5 @@ fi
 echo -e "${BOLD}═══════════════════════════════════════════${NC}"
 
 # Cleanup
-rm -rf sessions/
+rm -rf sessions/ 2>/dev/null
 exit $FAILS
