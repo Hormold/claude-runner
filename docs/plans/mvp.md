@@ -15,10 +15,10 @@ Implement a production-quality Claude Code orchestration service. The service ma
 ### Task 1: Core types and config schema validation
 Refactor `src/types.ts` to be comprehensive. Add Zod schema validation for `config.json` so invalid configs fail early with clear errors. Add a `defaults.ts` with sensible defaults.
 
-- [ ] Add Zod dependency, define `ContextConfigSchema` with all fields validated
-- [ ] Export validated `parseConfig(raw: unknown): ContextConfig` function
-- [ ] Add `defaults.ts` with `DEFAULT_CONFIG`, `DEFAULT_AGENTS_MD`, `DEFAULT_MEMORY_MD`
-- [ ] Add unit tests for config validation (valid, missing fields, extra fields, bad types)
+- [x] Add Zod dependency, define `ContextConfigSchema` with all fields validated
+- [x] Export validated `parseConfig(raw: unknown): ContextConfig` function
+- [x] Add `defaults.ts` with `DEFAULT_CONFIG`, `DEFAULT_AGENTS_MD`, `DEFAULT_MEMORY_MD`
+- [x] Add unit tests for config validation (valid, missing fields, extra fields, bad types)
 
 ### Task 2: Task queue with full test coverage  
 Rewrite `src/queue.ts` to be robust. Add proper error handling, task expiry (stuck tasks), and comprehensive tests.

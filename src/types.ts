@@ -1,19 +1,41 @@
-export interface ContextConfig {
-  mcpServers?: Record<string, McpServerConfig>;
-  env?: Record<string, string>;
-  tools?: { allowedCommands?: string[] };
-  model?: string;
-  maxTurns?: number;
-  historyWindow?: number;
-  idleTimeoutMs?: number;
+import { z } from 'zod';
+
+// ── MCP Server Config ──
+
+export const McpServerConfigSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  url: z.string().url().optional(),
+});
+
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
+// ── Context Config ──
+
+export const ContextConfigSchema = z.object({
+  model: z.string().min(1).optional(),
+  maxTurns: z.number().int().positive().optional(),
+  historyWindow: z.number().int().nonnegative().optional(),
+  idleTimeoutMs: z.number().int().positive().optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  tools: z.object({
+    allowedCommands: z.array(z.string()).optional(),
+  }).optional(),
+});
+
+export type ContextConfig = z.infer<typeof ContextConfigSchema>;
+
+/**
+ * Parse and validate a raw config object. Throws ZodError with clear messages on invalid input.
+ * Strips unknown fields via passthrough-less parsing.
+ */
+export function parseConfig(raw: unknown): ContextConfig {
+  return ContextConfigSchema.parse(raw);
 }
 
-export interface McpServerConfig {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-}
+// ── Task ──
 
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -31,12 +53,16 @@ export interface Task {
   completedAt?: number;
 }
 
+// ── History ──
+
 export interface HistoryTurn {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
   taskId: string;
 }
+
+// ── Context Info ──
 
 export interface ContextInfo {
   contextId: string;

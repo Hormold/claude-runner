@@ -5,3 +5,6 @@ contexts/
 *.db
 *.db-journal
 *.db-wal
+
+# ralphex progress logs
+.ralphex/progress/

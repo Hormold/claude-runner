@@ -1,27 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { ContextConfig, ContextInfo } from './types.js';
-
-const DEFAULT_AGENTS_MD = `# Agent
-
-You are a helpful assistant working in this context workspace.
-
-## Memory
-- Read MEMORY.md for persistent context
-- Update MEMORY.md with important information to remember between tasks
-- Use data/ directory for working files
-
-## Tools
-- Check tools/ directory for available CLI scripts
-- Use them as needed to complete tasks
-`;
-
-const DEFAULT_CONFIG: ContextConfig = {
-  model: 'claude-sonnet-4-20250514',
-  maxTurns: 50,
-  historyWindow: 20,
-  idleTimeoutMs: 300_000, // 5 minutes
-};
+import { ContextConfig, ContextInfo, parseConfig } from './types.js';
+import { DEFAULT_CONFIG, DEFAULT_AGENTS_MD, DEFAULT_MEMORY_MD } from './defaults.js';
 
 export class ContextManager {
   private baseDir: string;
@@ -61,12 +41,12 @@ export class ContextManager {
     // Write MEMORY.md
     fs.writeFileSync(
       path.join(dir, 'MEMORY.md'),
-      '# Memory\n\n_No memories yet. This file will be updated as tasks are completed._\n',
+      DEFAULT_MEMORY_MD,
       'utf-8',
     );
 
-    // Write config.json
-    const finalConfig = { ...DEFAULT_CONFIG, ...config };
+    // Write config.json (validate merged config)
+    const finalConfig = parseConfig({ ...DEFAULT_CONFIG, ...config });
     fs.writeFileSync(
       path.join(dir, 'config.json'),
       JSON.stringify(finalConfig, null, 2),
@@ -83,7 +63,8 @@ export class ContextManager {
   getConfig(contextId: string): ContextConfig {
     const configPath = path.join(this.contextPath(contextId), 'config.json');
     if (!fs.existsSync(configPath)) return DEFAULT_CONFIG;
-    return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return parseConfig(raw);
   }
 
   getInfo(contextId: string, sessionAlive = false): ContextInfo {
