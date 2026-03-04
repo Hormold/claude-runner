@@ -32,12 +32,12 @@ Rewrite `src/queue.ts` to be robust. Add proper error handling, task expiry (stu
 ### Task 3: Context manager with template support
 Rewrite `src/context.ts` with template support, validation, and proper file operations.
 
-- [ ] Add `_template/` directory support: new contexts clone from template
-- [ ] Validate contextId format (alphanumeric, hyphens, underscores, 1-64 chars)
-- [ ] Add `updateConfig(contextId, partial)` for merging config changes
-- [ ] Add `listFiles(contextId)` to show workspace contents
-- [ ] Use Zod config validation from Task 1 when reading/writing config
-- [ ] Write tests: create, create from template, delete, list, update config, path traversal prevention, invalid IDs
+- [x] Add `_template/` directory support: new contexts clone from template
+- [x] Validate contextId format (alphanumeric, hyphens, underscores, 1-64 chars)
+- [x] Add `updateConfig(contextId, partial)` for merging config changes
+- [x] Add `listFiles(contextId)` to show workspace contents
+- [x] Use Zod config validation from Task 1 when reading/writing config
+- [x] Write tests: create, create from template, delete, list, update config, path traversal prevention, invalid IDs
 
 ### Task 4: History manager with compaction
 Rewrite `src/history.ts` with proper structure, compaction for long-running contexts, and tests.
