@@ -11,10 +11,10 @@
  * Sessions survive restarts. Container dies → next call restores everything.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { execSync, spawn } from 'child_process';
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync,
-  cpSync, symlinkSync, readdirSync, rmSync
+  cpSync, symlinkSync, readdirSync, rmSync, copyFileSync
 } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -25,6 +25,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const TEMPLATE_DIR = __dirname;                          // Where AGENTS.md + tools/ live
 const SESSIONS_DIR = join(__dirname, 'sessions');        // All session workspaces
+const DOCKER_IMAGE = 'claude-runner-context';
 const MODEL = 'claude-sonnet-4-20250514';
 const MAX_TURNS = 10;
 
@@ -81,6 +82,101 @@ function saveState(sessionId, state) {
   writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
+// ── Docker execution ──
+
+function getApiKey() {
+  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  // Try OAuth credentials
+  try {
+    const home = process.env.HOME || '/root';
+    const credPath = join(home, '.claude', '.credentials.json');
+    const creds = JSON.parse(readFileSync(credPath, 'utf-8'));
+    return creds?.claudeAiOauth?.accessToken;
+  } catch { return null; }
+}
+
+function buildWorkerScript(prompt, systemPrompt, resumeId) {
+  const escapedPrompt = JSON.stringify(prompt);
+  const escapedSystem = JSON.stringify(systemPrompt);
+  const resumeOpt = resumeId ? `resume: ${JSON.stringify(resumeId)},` : '';
+
+  return `
+import { query } from '/app/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
+
+const stream = query({
+  prompt: ${escapedPrompt},
+  options: {
+    model: '${MODEL}',
+    maxTurns: ${MAX_TURNS},
+    cwd: '/workspace',
+    systemPrompt: ${escapedSystem},
+    ${resumeOpt}
+    permissionMode: 'bypassPermissions',
+    allowDangerouslySkipPermissions: true,
+  }
+});
+
+let result = '', sid = '', cost = 0, dur = 0;
+for await (const m of stream) {
+  if (m.type === 'system' && m.subtype === 'init') sid = m.session_id;
+  if (m.type === 'assistant' && m.message?.content) {
+    for (const b of m.message.content) {
+      if (b.type === 'tool_use') process.stderr.write('tool:' + b.name + ' ');
+    }
+  }
+  if (m.type === 'result' && m.subtype === 'success') {
+    result = m.result || '';
+    cost = m.total_cost_usd || 0;
+    dur = m.duration_ms || 0;
+  }
+}
+console.log(JSON.stringify({ result, sessionId: sid, cost, duration: dur }));
+`;
+}
+
+function runInDocker({ containerName, workspace, claudeDir, apiKey, script }) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      'run', '--rm',
+      '--name', containerName,
+      '-v', `${workspace}:/workspace`,
+      '-v', `${claudeDir}:/home/runner/.claude`,
+      '-e', `ANTHROPIC_API_KEY=${apiKey}`,
+      '-e', 'NODE_PATH=/app/node_modules',
+      '-w', '/workspace',
+      '--entrypoint', 'node',
+      DOCKER_IMAGE,
+      '--input-type=module', '-e', script,
+    ];
+
+    const child = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stdout = '', stderr = '';
+    child.stdout.on('data', d => stdout += d);
+    child.stderr.on('data', d => stderr += d);
+
+    child.on('close', (code) => {
+      // Parse tool calls from stderr
+      const toolMatches = stderr.match(/tool:(\S+)/g);
+      if (toolMatches) {
+        console.log(`[session:${containerName}] Tools: ${toolMatches.map(t => t.replace('tool:', '')).join(', ')}`);
+      }
+
+      if (code !== 0 && !stdout.trim()) {
+        reject(new Error(`Docker exited ${code}: ${stderr.slice(-200)}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout.trim()));
+      } catch {
+        reject(new Error(`Invalid output: ${stdout.slice(0, 200)}`));
+      }
+    });
+
+    child.on('error', reject);
+  });
+}
+
 // ── Core: run agent in isolated session ──
 
 /**
@@ -127,23 +223,31 @@ export async function ask(sessionId, message, context) {
   let result = '', sdkSessionId = '', cost = 0, duration = 0;
   const tools = [];
 
-  const stream = query({ prompt: fullPrompt, options: opts });
+  // Get API key
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('No ANTHROPIC_API_KEY or OAuth credentials found');
 
-  for await (const m of stream) {
-    if (m.type === 'system' && m.subtype === 'init') {
-      sdkSessionId = m.session_id;
-    }
-    if (m.type === 'assistant' && m.message?.content) {
-      for (const b of m.message.content) {
-        if (b.type === 'tool_use') tools.push(b.name);
-      }
-    }
-    if (m.type === 'result' && m.subtype === 'success') {
-      result = m.result || '';
-      cost = m.total_cost_usd || 0;
-      duration = m.duration_ms || 0;
-    }
-  }
+  // Container name for this session
+  const containerName = `agent-${sessionId}`;
+  const claudeDir = join(dir, '.claude');
+  mkdirSync(claudeDir, { recursive: true });
+
+  // Build worker script
+  const workerScript = buildWorkerScript(fullPrompt, systemPrompt, state?.sdkSessionId);
+
+  // Run in Docker container
+  const dockerResult = await runInDocker({
+    containerName,
+    workspace: dir,
+    claudeDir,
+    apiKey,
+    script: workerScript,
+  });
+
+  result = dockerResult.result || '';
+  sdkSessionId = dockerResult.sessionId || '';
+  cost = dockerResult.cost || 0;
+  duration = dockerResult.duration || 0;
 
   // Parse structured output if OUTPUT.md exists
   let output = null;
