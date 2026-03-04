@@ -101,32 +101,36 @@ export function createApp(deps: AppDeps) {
   // ── Task processing ──
   let processing = false;
 
+  let rerunRequested = false;
+
   async function processQueue() {
-    if (processing) return;
+    if (processing) { rerunRequested = true; return; }
     processing = true;
 
     try {
-      const dispatched = new Set<string>();
-      while (true) {
-        const runningContexts = sessionManager.getRunningContexts();
-        // Merge in-flight dispatched contexts that haven't registered in SessionManager yet
-        for (const ctx of dispatched) runningContexts.add(ctx);
+      do {
+        rerunRequested = false;
+        const dispatched = new Set<string>();
+        while (true) {
+          const runningContexts = sessionManager.getRunningContexts();
+          // Merge in-flight dispatched contexts that haven't registered in SessionManager yet
+          for (const ctx of dispatched) runningContexts.add(ctx);
 
-        // Don't dispatch beyond max concurrent sessions
-        const totalInFlight = sessionManager.getRunningCount() + dispatched.size;
-        if (totalInFlight >= sessionManager.getMaxConcurrent()) break;
+          // Don't dispatch beyond max concurrent sessions — use merged set to avoid double-counting
+          if (runningContexts.size >= sessionManager.getMaxConcurrent()) break;
 
-        const task = queue.nextAvailable(runningContexts);
-        if (!task) break;
+          const task = queue.nextAvailable(runningContexts);
+          if (!task) break;
 
-        queue.markRunning(task.id);
-        dispatched.add(task.contextId);
-        console.log(`[queue] Running task ${task.id} for context '${task.contextId}'`);
+          queue.markRunning(task.id);
+          dispatched.add(task.contextId);
+          console.log(`[queue] Running task ${task.id} for context '${task.contextId}'`);
 
-        executeTask(task.id, task.contextId, task.prompt, task.webhook).catch(err => {
-          console.error(`[queue] Task ${task.id} failed:`, err);
-        });
-      }
+          executeTask(task.id, task.contextId, task.prompt, task.webhook).catch(err => {
+            console.error(`[queue] Task ${task.id} failed:`, err);
+          });
+        }
+      } while (rerunRequested);
     } finally {
       processing = false;
     }
@@ -262,6 +266,7 @@ export function createApp(deps: AppDeps) {
     }
 
     sessionManager.killSession(contextId);
+    queue.failContextTasks(contextId, 'Context was deleted');
     contextManager.delete(contextId);
     console.log(`[api] Context '${contextId}' deleted`);
     res.json({ deleted: contextId });
@@ -400,11 +405,11 @@ if (isMainModule()) {
       console.log('[shutdown] Server closed');
     });
 
-    // Mark running tasks as failed so they don't block contexts on restart
-    queue.expireStuckTasks(0);
-
-    // Abort running tasks and kill sessions
+    // Abort running tasks and kill sessions first
     sessionManager.abortAll();
+
+    // Mark any remaining running tasks as failed so they don't block contexts on restart
+    queue.expireStuckTasks(0);
 
     // Give in-flight error handlers a moment to finish DB writes, then close
     setTimeout(() => {

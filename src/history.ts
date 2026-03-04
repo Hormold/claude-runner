@@ -112,7 +112,7 @@ export class HistoryManager {
 
     // Rewrite the file with only the kept turns
     const file = this.historyFile();
-    const content = kept.map(t => JSON.stringify(t)).join('\n') + '\n';
+    const content = kept.length === 0 ? '' : kept.map(t => JSON.stringify(t)).join('\n') + '\n';
     fs.writeFileSync(file, content, 'utf-8');
 
     return summary;

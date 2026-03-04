@@ -115,6 +115,17 @@ export class TaskQueue {
     `).all(contextId, limit) as Task[];
   }
 
+  // Fail all queued/running tasks for a context (used when context is deleted)
+  failContextTasks(contextId: string, error: string): number {
+    const now = Date.now();
+    const result = this.db.prepare(`
+      UPDATE tasks
+      SET status = 'failed', error = ?, completedAt = ?
+      WHERE contextId = ? AND status IN ('queued', 'running')
+    `).run(error, now, contextId);
+    return result.changes;
+  }
+
   // Expire tasks stuck in 'running' for longer than maxAgeMs (default 30 min)
   expireStuckTasks(maxAgeMs = 30 * 60 * 1000): number {
     const cutoff = Date.now() - maxAgeMs;
