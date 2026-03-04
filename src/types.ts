@@ -18,6 +18,8 @@ export const ContextConfigSchema = z.object({
   maxTurns: z.number().int().positive().optional(),
   historyWindow: z.number().int().nonnegative().optional(),
   idleTimeoutMs: z.number().int().positive().optional(),
+  maxConcurrentSessions: z.number().int().positive().optional(),
+  executionTimeoutMs: z.number().int().positive().optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
   env: z.record(z.string(), z.string()).optional(),
   tools: z.object({

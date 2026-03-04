@@ -1,4 +1,4 @@
-import { query, type SDKMessage, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-code';
+import { query, type SDKResultMessage, type SDKAssistantMessage, type Options, type McpServerConfig as SdkMcpConfig } from '@anthropic-ai/claude-code';
 import { ContextConfig } from './types.js';
 import { HistoryManager } from './history.js';
 import { ContextManager } from './context.js';
@@ -11,17 +11,45 @@ interface ActiveSession {
   workDir: string;
   idleTimer: ReturnType<typeof setTimeout>;
   lastActivity: number;
-  sessionId?: string; // Claude Code session ID for --resume
+  sessionId?: string;
 }
+
+const DEFAULT_MAX_CONCURRENT = 5;
+const DEFAULT_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, ActiveSession>();
   private running = new Set<string>();
   private contextManager: ContextManager;
+  private maxConcurrent: number;
+  private cleanupRegistered = false;
+  private abortControllers = new Map<string, AbortController>();
 
-  constructor(contextManager: ContextManager) {
+  constructor(contextManager: ContextManager, maxConcurrent?: number) {
     super();
     this.contextManager = contextManager;
+    this.maxConcurrent = maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+  }
+
+  /**
+   * Register SIGINT/SIGTERM handlers for graceful cleanup.
+   * Call once during server startup.
+   */
+  registerCleanupHandlers(): void {
+    if (this.cleanupRegistered) return;
+    this.cleanupRegistered = true;
+
+    const cleanup = () => {
+      // Abort all running tasks
+      for (const [contextId, controller] of this.abortControllers) {
+        controller.abort();
+        this.abortControllers.delete(contextId);
+      }
+      this.killAll();
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
   }
 
   isRunning(contextId: string): boolean {
@@ -36,6 +64,14 @@ export class SessionManager extends EventEmitter {
     return new Set(this.running);
   }
 
+  getRunningCount(): number {
+    return this.running.size;
+  }
+
+  getMaxConcurrent(): number {
+    return this.maxConcurrent;
+  }
+
   async executeTask(
     contextId: string,
     prompt: string,
@@ -45,7 +81,14 @@ export class SessionManager extends EventEmitter {
       throw new Error(`Context '${contextId}' is already running a task`);
     }
 
+    if (this.running.size >= this.maxConcurrent) {
+      throw new Error(
+        `Max concurrent sessions reached (${this.maxConcurrent}). Try again later.`,
+      );
+    }
+
     this.running.add(contextId);
+    this.emit('task:start', { contextId, taskId });
 
     try {
       const config = this.contextManager.getConfig(contextId);
@@ -54,6 +97,7 @@ export class SessionManager extends EventEmitter {
 
       // Reset idle timer
       this.touchSession(contextId, workDir, config);
+      this.emit('session:created', { contextId });
 
       // Save user prompt to history
       history.append({
@@ -78,6 +122,10 @@ export class SessionManager extends EventEmitter {
       // Load system prompt from AGENTS.md
       const systemPrompt = await this.loadAgentsMd(workDir);
 
+      // Create abort controller for timeout support
+      const abortController = new AbortController();
+      this.abortControllers.set(contextId, abortController);
+
       // Build options
       const session = this.sessions.get(contextId);
       const options: Options = {
@@ -86,6 +134,7 @@ export class SessionManager extends EventEmitter {
         cwd: workDir,
         permissionMode: 'bypassPermissions',
         env: config.env,
+        abortController,
       };
 
       if (systemPrompt) {
@@ -101,8 +150,15 @@ export class SessionManager extends EventEmitter {
         options.resume = session.sessionId;
       }
 
-      // Execute Claude Code
-      const result = await this.runClaudeCode(fullPrompt, options, contextId);
+      // Execute with timeout
+      const timeoutMs = config.executionTimeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS;
+      const result = await this.runWithTimeout(
+        () => this.runClaudeCode(fullPrompt, options, contextId),
+        timeoutMs,
+        abortController,
+        contextId,
+        taskId,
+      );
 
       // Save assistant response to history
       history.append({
@@ -113,10 +169,41 @@ export class SessionManager extends EventEmitter {
         tokenEstimate: Math.ceil(result.length / 4),
       });
 
+      this.emit('task:complete', { contextId, taskId, result });
       return result;
+    } catch (err: any) {
+      this.emit('task:failed', { contextId, taskId, error: err.message || String(err) });
+      throw err;
     } finally {
       this.running.delete(contextId);
+      this.abortControllers.delete(contextId);
     }
+  }
+
+  private async runWithTimeout(
+    fn: () => Promise<string>,
+    timeoutMs: number,
+    abortController: AbortController,
+    contextId: string,
+    taskId: string,
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Task '${taskId}' in context '${contextId}' timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      fn().then(
+        (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
   }
 
   private buildPromptWithHistory(
@@ -153,7 +240,7 @@ export class SessionManager extends EventEmitter {
         if (resultMsg.subtype === 'success') {
           resultText = resultMsg.result;
         } else {
-          resultText = `(error: ${resultMsg.subtype})`;
+          throw new Error(`Claude Code error: ${resultMsg.subtype}`);
         }
       } else if (message.type === 'assistant') {
         const assistantMsg = message as SDKAssistantMessage;
@@ -235,6 +322,12 @@ export class SessionManager extends EventEmitter {
       clearTimeout(session.idleTimer);
       this.sessions.delete(contextId);
     }
+    // Abort any running task for this context
+    const controller = this.abortControllers.get(contextId);
+    if (controller) {
+      controller.abort();
+      this.abortControllers.delete(contextId);
+    }
   }
 
   killAll() {
@@ -242,5 +335,10 @@ export class SessionManager extends EventEmitter {
       clearTimeout(session.idleTimer);
     }
     this.sessions.clear();
+    // Abort all running tasks
+    for (const [, controller] of this.abortControllers) {
+      controller.abort();
+    }
+    this.abortControllers.clear();
   }
 }

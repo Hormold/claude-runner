@@ -51,13 +51,13 @@ Rewrite `src/history.ts` with proper structure, compaction for long-running cont
 ### Task 5: Session manager with proper SDK integration
 Rewrite `src/session-manager.ts` with correct Claude Code SDK usage, session resume, error handling, and resource management.
 
-- [ ] Properly use `query()` async generator — iterate all messages, handle errors
-- [ ] Implement session resume via SDK `resume` option with stored session IDs
-- [ ] Add `maxConcurrentSessions` config (default: 5) — reject tasks when full
-- [ ] Add proper cleanup on SIGINT/SIGTERM
-- [ ] Add execution timeout per task (from config, default 10 min)
-- [ ] Emit events: `task:start`, `task:complete`, `task:failed`, `session:created`, `session:expired`
-- [ ] Write tests: execute task (mock SDK), session reuse, idle timeout, max concurrent limit, error handling
+- [x] Properly use `query()` async generator — iterate all messages, handle errors
+- [x] Implement session resume via SDK `resume` option with stored session IDs
+- [x] Add `maxConcurrentSessions` config (default: 5) — reject tasks when full
+- [x] Add proper cleanup on SIGINT/SIGTERM
+- [x] Add execution timeout per task (from config, default 10 min)
+- [x] Emit events: `task:start`, `task:complete`, `task:failed`, `session:created`, `session:expired`
+- [x] Write tests: execute task (mock SDK), session reuse, idle timeout, max concurrent limit, error handling
 
 ### Task 6: REST API with proper error handling and validation
 Rewrite `src/index.ts` with input validation, proper HTTP status codes, CORS, request logging, and graceful shutdown.
