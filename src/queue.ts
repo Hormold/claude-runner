@@ -76,14 +76,27 @@ export class TaskQueue {
   }
 
   // Get next task from any context that isn't currently running
+  // Respects priority across all contexts (highest priority first, then FIFO)
   nextAvailable(runningContexts: Set<string>): Task | null {
-    const contexts = this.contextsWithQueuedTasks();
-    for (const ctx of contexts) {
-      if (!runningContexts.has(ctx)) {
-        return this.nextForContext(ctx);
-      }
+    if (runningContexts.size === 0) {
+      const row = this.db.prepare(`
+        SELECT * FROM tasks
+        WHERE status = 'queued'
+        ORDER BY priority DESC, createdAt ASC
+        LIMIT 1
+      `).get() as Task | undefined;
+      return row ?? null;
     }
-    return null;
+
+    // Build exclusion list for running contexts
+    const placeholders = [...runningContexts].map(() => '?').join(', ');
+    const row = this.db.prepare(`
+      SELECT * FROM tasks
+      WHERE status = 'queued' AND contextId NOT IN (${placeholders})
+      ORDER BY priority DESC, createdAt ASC
+      LIMIT 1
+    `).get(...runningContexts) as Task | undefined;
+    return row ?? null;
   }
 
   markRunning(taskId: string) {

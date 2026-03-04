@@ -34,6 +34,8 @@ function die(msg: string): never {
   throw new CliError(msg);
 }
 
+const BOOLEAN_FLAGS = new Set(['wait', 'help']);
+
 function parseArgs(argv: string[]): { positional: string[]; flags: Record<string, string | true> } {
   const positional: string[] = [];
   const flags: Record<string, string | true> = {};
@@ -42,12 +44,16 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Record<string
     const arg = argv[i];
     if (arg.startsWith('--')) {
       const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else {
+      if (BOOLEAN_FLAGS.has(key)) {
         flags[key] = true;
+      } else {
+        const next = argv[i + 1];
+        if (next && !next.startsWith('--')) {
+          flags[key] = next;
+          i++;
+        } else {
+          flags[key] = true;
+        }
       }
     } else {
       positional.push(arg);

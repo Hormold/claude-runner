@@ -233,6 +233,7 @@ export class SessionManager extends EventEmitter {
     const stream = query({ prompt, options });
 
     let resultText = '';
+    let hasResult = false;
     let sessionId: string | undefined;
 
     for await (const message of stream) {
@@ -245,12 +246,13 @@ export class SessionManager extends EventEmitter {
         const resultMsg = message as SDKResultMessage;
         if (resultMsg.subtype === 'success') {
           resultText = resultMsg.result;
+          hasResult = true;
         } else {
           throw new Error(`Claude Code error: ${resultMsg.subtype}`);
         }
-      } else if (message.type === 'assistant') {
+      } else if (message.type === 'assistant' && !hasResult) {
+        // Use assistant text as fallback only if no result message received yet
         const assistantMsg = message as SDKAssistantMessage;
-        // Extract text blocks from assistant messages
         const textParts = assistantMsg.message.content
           .filter((b: { type: string }) => b.type === 'text')
           .map((b: any) => b.text);

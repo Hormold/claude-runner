@@ -370,7 +370,7 @@ if (isMainModule()) {
   cleanupInterval.unref();
 
   const corsOrigins = process.env.CORS_ORIGINS || '*';
-  const { app } = createApp({ queue, contextManager, sessionManager, corsOrigins });
+  const { app, processQueue } = createApp({ queue, contextManager, sessionManager, corsOrigins });
 
   const PORT = parseInt(process.env.PORT || '3456');
 
@@ -390,6 +390,8 @@ if (isMainModule()) {
 ║  GET  /api/health          Health    ║
 ╚══════════════════════════════════════╝
     `);
+    // Process any leftover queued tasks from previous crashes
+    processQueue();
   });
 
   // Graceful shutdown
