@@ -228,7 +228,7 @@ This is a starter template. For production, add: authentication on the API, rate
 Depends on complexity. Simple Q&A: ~$0.01. Tool-heavy tasks: ~$0.03-0.05. The `cost` field in every response gives you exact USD.
 
 **Q: Can I use a different model?**
-Set `MODEL=claude-opus-4-20250514` (or any Anthropic model) in env or `.env`.
+Set `MODEL=claude-opus-4-6` (or any Anthropic model) in env or `.env`.
 
 ## License
 

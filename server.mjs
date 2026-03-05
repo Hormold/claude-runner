@@ -34,7 +34,7 @@ const PORT         = parseInt(process.env.PORT || '3456');
 const AGENT_DIR    = resolve(process.env.AGENT_DIR || './agent');
 const SESSIONS_DIR = resolve(process.env.SESSIONS_DIR || './sessions');
 const DOCKER_IMAGE = process.env.DOCKER_IMAGE || 'claude-runner';
-const MODEL        = process.env.MODEL || 'claude-sonnet-4-20250514';
+const MODEL        = process.env.MODEL || 'claude-sonnet-4-6';
 const MAX_TURNS    = parseInt(process.env.MAX_TURNS || '10');
 const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
 
