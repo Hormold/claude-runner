@@ -2,11 +2,7 @@
 
 Run AI agents in isolated Docker containers. Fork → customize → deploy.
 
-```
-Your app  →  POST /task  →  Claude Runner  →  Docker container  →  Structured JSON
-                                    ↕
-                            WS /stream/:id  →  real-time events to your frontend
-```
+![Claude Runner Architecture](diagram.png)
 
 ## Why
 
@@ -202,7 +198,7 @@ You don't need a clean REST API. If your product has a web UI, you can reverse-e
 1. Open your product in Chrome
 2. Open DevTools (`F12`) → **Network** tab
 3. Check **"Preserve log"** (keeps requests across page navigations)
-4. Go to **DevTools Settings** (gear icon) → check **"Include cookies"** in HAR exports
+4. Go to **DevTools Settings** (gear icon) → scroll down → check **"Allow to generate HAR with sensitive data"**
 5. **Use your product** — click through every feature you want the agent to use:
    - Create things, edit them, delete them
    - Search, filter, sort
