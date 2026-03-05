@@ -193,6 +193,66 @@ claude-runner/
 └── LICENSE            ← MIT
 ```
 
+## Got a Legacy Product? Add AI in an Afternoon
+
+You don't need a clean REST API. If your product has a web UI, you can reverse-engineer its API in minutes and turn it into agent tools.
+
+### Step 1: Record your API with Chrome DevTools
+
+1. Open your product in Chrome
+2. Open DevTools (`F12`) → **Network** tab
+3. Check **"Preserve log"** (keeps requests across page navigations)
+4. Go to **DevTools Settings** (gear icon) → check **"Include cookies"** in HAR exports
+5. **Use your product** — click through every feature you want the agent to use:
+   - Create things, edit them, delete them
+   - Search, filter, sort
+   - Change settings, update profiles
+   - The more you do, the more the agent will know how to do
+
+6. When done → right-click the Network log → **"Save all as HAR with content"**
+
+### Step 2: Generate CLI tools from HAR
+
+Give the HAR file to Claude and say:
+
+```
+Here's a HAR file from our product. Create a CLI tool (bash + curl) that can:
+- List, create, update, delete [resources]
+- Use environment variables for auth: $API_URL, $API_TOKEN
+- Output JSON
+- Handle errors
+
+Group related operations into one script with subcommands.
+```
+
+Claude will analyze every request/response and generate shell scripts that replicate the API calls.
+
+### Step 3: Handle authentication
+
+The tricky part is auth. Add a note to your prompt:
+
+```
+Authentication works like this: [describe your auth flow]
+- API key in header: Authorization: Bearer $TOKEN
+- Or: session cookie (include how to get it)
+- Or: OAuth flow (describe the endpoint)
+```
+
+If your product uses simple API keys or bearer tokens — just pass them as env vars. If it uses cookies/sessions, your CLI tool can include a `login` subcommand.
+
+### Step 4: Drop scripts into tools/ and go
+
+```bash
+cp generated-cli.sh agent/tools/
+chmod +x agent/tools/generated-cli.sh
+```
+
+Update `agent/AGENTS.md` with instructions on what the tool does, and you're done. Your legacy product now has an AI agent.
+
+### The key insight
+
+Your product already has the hard part — the business logic, the data, years of development. The agent doesn't need to understand your codebase. It just needs a way to call your API and instructions on when to use it.
+
 ## Testing
 
 ```bash
